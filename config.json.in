@@ -12,6 +12,10 @@
     "wood pigeon",
     "domestic cats"
   ],
+  "skip_kinds": [
+    "on_demand",
+    "on_demand_link"
+  ],
   "max_files_per_batch": 200,
   "max_batches_per_run": 2,
   "frames_per_clip": 4,

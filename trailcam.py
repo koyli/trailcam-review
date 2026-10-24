@@ -59,6 +59,7 @@ TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)$", re.I)
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_PREFIX_RE = re.compile(r"^(\d{6})(?:\D|$)")
 DATETIME_PREFIX_RE = re.compile(r"^(\d{14})(?:\D|$)")
+RING_KIND_RE = re.compile(r"^\d{6}-([a-z_]+)-\d+$")
 
 
 def log(msg):
@@ -86,8 +87,19 @@ def is_reviewed(r, paths, legacy):
     return r in paths or (r.startswith(CONFIG["sources"][0] + "/") and r.rsplit("/", 1)[-1] in legacy)
 
 
-def candidate_files():
-    """Finished media files under the source folders (missing folders are skipped)."""
+def event_kind(p):
+    """Ring's event type from <HHMMSS>-<kind>-<id>.mp4 (motion, ding, on_demand, ...); else None."""
+    m = RING_KIND_RE.match(p.stem)
+    return m.group(1) if m else None
+
+
+def skipped(p):
+    return event_kind(p) in CONFIG.get("skip_kinds", [])
+
+
+def candidate_files(include_skipped=False):
+    """Finished media files under the source folders (missing folders are skipped).
+    Event types listed in skip_kinds (e.g. Ring live view) are left alone, unreviewed."""
     min_age = CONFIG.get("min_file_age_minutes", 10) * 60
     now = time.time()
     out = []
@@ -100,6 +112,8 @@ def candidate_files():
             if p.suffix.lower() not in IMAGE_EXT | VIDEO_EXT:
                 continue
             if now - p.stat().st_mtime < min_age:
+                continue
+            if not include_skipped and skipped(p):
                 continue
             out.append(p)
     return out
@@ -293,6 +307,9 @@ def cmd_status(_):
     for s in SOURCES:
         log(f"  {'found  ' if s.is_dir() else 'missing'} {s}")
     log(f"Unreviewed finished files: {len(unreviewed())}")
+    n = sum(skipped(p) for p in candidate_files(include_skipped=True))
+    if n:
+        log(f"Skipped by type ({', '.join(CONFIG.get('skip_kinds', []))}): {n}")
     for b in pending_batches():
         log(f"PENDING batch: {b}")
 
