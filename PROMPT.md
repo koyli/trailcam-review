@@ -18,7 +18,9 @@ The batch to review is: `{{BATCH}}`
 2. Zoom in before naming anything:
    - `python3 trailcam.py crop FILE --t SECONDS --box x,y,w,h` (box as fractions 0-1
      of the frame, e.g. `0.5,0.4,0.3,0.4`; leave out `--t` for a photo). Then Read the
-     output file it prints.
+     output file it prints. For FILE, always use the full path from `index.tsv` (e.g.
+     `motion/anpr/20261024162045-52.mkv`): different cameras can have files with the
+     same name.
    - For close or fast passes, use `python3 trailcam.py burst FILE --start A --end B --fps 8`.
    - **Before calling any event "nothing there", open a full-resolution `crop` of its
      photo (no `--box`)**, or of a video frame if it has no photo, and look closely.

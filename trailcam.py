@@ -56,6 +56,9 @@ MIN_BLOB = 5          # blob size (pixels) that counts as "something moved"
 MAX_SAMPLES = 120     # long clips are sampled more sparsely than 2 fps
 EVENT_GAP = 5         # seconds; files from one camera this close together are one event
 TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)$", re.I)
+DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TIME_PREFIX_RE = re.compile(r"^(\d{6})(?:\D|$)")
+DATETIME_PREFIX_RE = re.compile(r"^(\d{14})(?:\D|$)")
 
 
 def log(msg):
@@ -121,21 +124,39 @@ def batch_path(name):
 
 
 def capture_time(p):
+    """When the clip was recorded: from the name where possible, since files are often
+    downloaded in bulk and their modification times say nothing about the event."""
     m = TRAILCAM_RE.match(p.stem)
     if m:
         try:
             return datetime.strptime(m.group(2) + m.group(3), "%Y%m%d%H%M%S")
         except ValueError:
             pass
+    # motion: <YYYYmmddHHMMSS>-<event>.mkv
+    t = DATETIME_PREFIX_RE.match(p.stem)
+    if t:
+        try:
+            return datetime.strptime(t.group(1), "%Y%m%d%H%M%S")
+        except ValueError:
+            pass
+    # Ring downloads: <camera>/<YYYY-MM-DD>/<HHMMSS>-<kind>-<id>.mp4 (UTC)
+    d, t = DATE_DIR_RE.match(p.parent.name), TIME_PREFIX_RE.match(p.stem)
+    if d and t:
+        try:
+            return datetime.strptime(d.group(0) + t.group(1), "%Y-%m-%d%H%M%S")
+        except ValueError:
+            pass
     return datetime.fromtimestamp(p.stat().st_mtime)
 
 
 def camera_of(p):
+    """Trail cameras name themselves in the file name; elsewhere the camera is the
+    folder directly under the source (motion/anpr/..., ring-events/front-door/...)."""
     m = TRAILCAM_RE.match(p.stem)
-    source = p.relative_to(ROOT).parts[0]
     if m:
         return m.group(1).upper()
-    return f"{source}:{p.parent.name}" if p.parent != ROOT / source else source
+    parts = p.relative_to(ROOT).parts
+    return f"{parts[0]}:{parts[1]}" if len(parts) > 2 else parts[0]
 
 
 # ---------- video helpers ----------
@@ -198,6 +219,8 @@ def motion_scores(video):
     """(seconds per sample, per-sample size of the largest region unlike the clip's background)."""
     d = duration(video)
     fps = 2.0 if not d else min(2.0, MAX_SAMPLES / d)
+    if d and d * fps < 4:
+        fps = 4 / d    # very short clips (motion often records under a second): still get 4 samples
     frames = [normalise(f) for f in tiny_frames(video, fps)]
     if len(frames) < 3:
         return 1 / fps, []
@@ -365,15 +388,26 @@ def parse_box(s):
 
 
 def resolve(name):
+    """A path as given in index.tsv (relative to the capture folder), or a bare file name
+    if it's unique: two cameras can produce identically named files."""
     for p in (Path(name), ROOT / name):
         if p.exists():
-            return p
-    for src in SOURCES:
-        if src.is_dir():
-            hits = list(src.rglob(Path(name).name))
-            if hits:
-                return hits[0]
+            return p.resolve()
+    hits = [h for src in SOURCES if src.is_dir() for h in src.rglob(Path(name).name)]
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        sys.exit(f"{name} matches several files; use the path from index.tsv:\n"
+                 + "\n".join(f"  {rel(h)}" for h in hits))
     sys.exit(f"Not found: {name}")
+
+
+def zoom_stem(src):
+    """Output name that keeps the camera folder, so same-named clips don't overwrite."""
+    try:
+        return rel(src).rsplit(".", 1)[0].replace("/", "_")
+    except ValueError:
+        return src.stem
 
 
 def cmd_crop(args):
@@ -393,7 +427,7 @@ def cmd_crop(args):
             W, H = im.size
             im = im.crop((int(x * W), int(y * H), int((x + w) * W), int((y + h) * H)))
         im.thumbnail((1200, 1200))
-        out = ZOOMS / f"{src.stem}_{args.t or 0:.1f}_{(args.box or 'full').replace(',', '-')}.jpg"
+        out = ZOOMS / f"{zoom_stem(src)}_{args.t or 0:.1f}_{(args.box or 'full').replace(',', '-')}.jpg"
         im.save(out, quality=88)
     log(str(out))
 
@@ -411,21 +445,31 @@ def cmd_burst(args):
                         f"{td}/f%03d.jpg"], check=False)
         frames = sorted(Path(td).glob("f*.jpg"))
         tiles = [(f, f"+{args.start + i / args.fps:.2f}s") for i, f in enumerate(frames)]
-        out = ZOOMS / f"{src.stem}_burst_{args.start}-{args.end}.jpg"
+        out = ZOOMS / f"{zoom_stem(src)}_burst_{args.start}-{args.end}.jpg"
         make_sheet(tiles, out, cols=6, tw=400)
     log(str(out))
 
 
+def sidecars(p):
+    """Non-media files that belong to a clip, e.g. Ring's <name>.json next to <name>.mp4."""
+    return [s for s in p.parent.iterdir()
+            if s != p and s.is_file() and s.name.startswith(p.stem + ".")
+            and s.suffix.lower() not in IMAGE_EXT | VIDEO_EXT]
+
+
 def move_to_delete(p):
-    dest = TO_DELETE / rel(p)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    n = 1
-    while dest.exists():
-        dest = dest.with_name(f"{dest.stem}.{n}{dest.suffix}")
-        n += 1
-    shutil.move(str(p), str(dest))
+    """Move a clip, and any sidecar files, to the same relative place under to-delete."""
+    base = TO_DELETE / rel(p)
+    base.parent.mkdir(parents=True, exist_ok=True)
+    tag, n = "", 1
+    while (base.parent / f"{p.stem}{tag}{p.suffix}").exists():
+        tag, n = f".{n}", n + 1
+    now = datetime.now().isoformat(timespec="seconds")
     with open(MANIFEST, "a") as f:
-        f.write(f"{datetime.now().isoformat(timespec='seconds')}\t{dest.relative_to(TO_DELETE).as_posix()}\n")
+        for src in [p] + sidecars(p):
+            dest = base.parent / f"{p.stem}{tag}{src.name[len(p.stem):]}"
+            shutil.move(str(src), str(dest))
+            f.write(f"{now}\t{dest.relative_to(TO_DELETE).as_posix()}\n")
 
 
 def cmd_done(args):
