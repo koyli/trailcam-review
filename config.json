@@ -1,0 +1,30 @@
+{
+  "capture_root": "~/capture",
+  "sources": [
+    "trailcam",
+    "motion",
+    "ring-events"
+  ],
+  "to_delete_dir": "to-delete",
+  "delete_after_days": 30,
+  "routine": [
+    "blackbird",
+    "wood pigeon",
+    "domestic cats"
+  ],
+  "max_files_per_batch": 200,
+  "max_batches_per_run": 2,
+  "frames_per_clip": 4,
+  "min_file_age_minutes": 10,
+  "pushover": {
+    "user_key_file": "~/.config/trailcam/pushover-user",
+    "app_token_file": "~/.config/trailcam/pushover-token",
+    "people_priority": 1,
+    "summary_priority": 0,
+    "extra_photos": 3,
+    "notify_when_nothing_new": false
+  },
+  "healthchecks": {
+    "ping_url": ""
+  }
+}

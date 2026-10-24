@@ -1,0 +1,14 @@
+# Private results and state: kept on this machine or the server, never published.
+report.md
+reviewed.txt
+highlights/
+*.jpg
+batches/
+zooms/
+logs/
+cleanup/
+run.lock
+
+# Local settings and secrets.
+.env
+*.env

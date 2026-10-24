@@ -1,0 +1,31 @@
+services:
+  trailcam:
+    build:
+      context: .
+      args:
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+    image: trailcam-review
+    volumes:
+      # The kit itself: scripts, config, report, batches, logs.
+      - ./:/app
+      # The footage (read-write: files are moved to capture/to-delete).
+      - ${HOME}/capture:/home/trailcam/capture
+      # Pushover keys and the Claude token, read-only.
+      - ${HOME}/.config/trailcam:/home/trailcam/.config/trailcam:ro
+      # Claude Code's own settings and login, kept between runs.
+      - claude-config:/home/trailcam/.claude-config
+      # Use the server's time zone for timestamps in messages.
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - path: ${HOME}/.config/trailcam/claude.env
+        required: false
+    # Isolation: no extra privileges, and modest resource limits.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+
+volumes:
+  claude-config:
