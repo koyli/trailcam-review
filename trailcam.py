@@ -13,6 +13,8 @@ All state lives next to this script; settings are in config.json (copied from co
                          frame-by-frame sheet of part of a video
   done BATCH [--force]   apply verdicts: keep in place, or move to to-delete
   purge                  delete to-delete files older than delete_after_days; prints the count
+  clear-skipped [--dry-run]
+                         move clips of the skip_kinds types (and their sidecars) to to-delete
   notify [--purged N]    send Pushover messages for batches not yet reported
 """
 import argparse
@@ -528,6 +530,23 @@ def cmd_done(args):
         f"moved {len(moved_files)} files ({moved_events} events) to {TO_DELETE}")
 
 
+def cmd_clear_skipped(args):
+    """Move every finished clip of a skipped type (e.g. Ring live view) to to-delete,
+    with its sidecar files, so it's purged with everything else after delete_after_days."""
+    clips = [p for p in candidate_files(include_skipped=True) if skipped(p)]
+    size = sum(p.stat().st_size + sum(s.stat().st_size for s in sidecars(p)) for p in clips)
+    log(f"{'Would move' if args.dry_run else 'Moving'} {len(clips)} clips "
+        f"({size / 1e9:.1f} GB with sidecars) of types: {', '.join(CONFIG.get('skip_kinds', []))}")
+    if args.dry_run:
+        for p in clips[:5]:
+            log(f"  e.g. {rel(p)}")
+        return
+    TO_DELETE.mkdir(parents=True, exist_ok=True)
+    for p in clips:
+        move_to_delete(p)
+    log(f"Moved {len(clips)} clips to {TO_DELETE}")
+
+
 def cmd_purge(_):
     """Delete to-delete files moved more than delete_after_days ago (by manifest; else by file age)."""
     if not TO_DELETE.is_dir():
@@ -685,11 +704,14 @@ def main():
     d.add_argument("batch")
     d.add_argument("--force", action="store_true", help="apply even if unfinished (unanswered = keep)")
     sub.add_parser("purge")
+    cs = sub.add_parser("clear-skipped")
+    cs.add_argument("--dry-run", action="store_true")
     n = sub.add_parser("notify")
     n.add_argument("--purged", type=int, default=0)
     args = ap.parse_args()
     {"status": cmd_status, "next": cmd_next, "prompt": cmd_prompt, "crop": cmd_crop,
-     "burst": cmd_burst, "done": cmd_done, "purge": cmd_purge, "notify": cmd_notify}[args.cmd](args)
+     "burst": cmd_burst, "done": cmd_done, "purge": cmd_purge, "clear-skipped": cmd_clear_skipped,
+     "notify": cmd_notify}[args.cmd](args)
 
 
 if __name__ == "__main__":
