@@ -54,7 +54,9 @@ The batch to review is: `{{BATCH}}`
    `people.txt`: one short line per event, e.g. `2 people with a dog, REAR 24 Oct 14:05`.
    It is sent at once as a separate high-priority alert.
 5. Save crops of up to 4 of the most interesting events with `crop`, and copy them into
-   the batch's `attach/` folder. Start each name with its rank, e.g.
+   the batch's `attach/` folder. Use `--box` so the animal or person fills a good part of
+   the picture (they're viewed on a phone), but leave enough around them to see
+   where they are. Start each name with its rank, e.g.
    `1 Badger side-on - DTCH 11 Sep 03.47.jpg`. Name the clearest picture of any people
    `people - REAR 24 Oct 14.05.jpg`, so it goes with the people alert. The top-ranked
    photo goes with the summary, and the next few follow as quiet extra messages.
