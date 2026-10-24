@@ -49,10 +49,10 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png"}
 VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".m4v"}
 
 # Motion scoring works on tiny grayscale frames.
-SW, SH = 96, 54
-SH_USED = 50          # ignore the bottom rows, where camera text overlays sit
+SW, SH = 128, 72      # large enough that a small bird far from the camera covers a few pixels
+SH_USED = 66          # ignore the bottom rows, where camera text overlays sit
 DIFF = 1.2            # per-pixel threshold, in standard deviations
-MIN_BLOB = 12         # blob size (pixels) that counts as "something moved"
+MIN_BLOB = 5          # blob size (pixels) that counts as "something moved"
 MAX_SAMPLES = 120     # long clips are sampled more sparsely than 2 fps
 EVENT_GAP = 5         # seconds; files from one camera this close together are one event
 TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)$", re.I)
@@ -220,6 +220,18 @@ def pick_times(step, scores, k):
     return [(i * step, scores[i]) for i in sorted(picks)]
 
 
+def spread_times(step, scores, n, taken):
+    """n moments spread evenly through the clip, skipping any within 1.5 s of one already taken,
+    so something motion detection missed (a small or distant animal) still gets looked at."""
+    out = []
+    for j in range(1, n + 1):
+        i = round(j * (len(scores) - 1) / (n + 1))
+        t = i * step
+        if all(abs(t - u) >= 1.5 for u, _ in taken + out):
+            out.append((t, scores[i]))
+    return out
+
+
 # ---------- sheets ----------
 
 def font(size):
@@ -286,6 +298,7 @@ def new_batch():
     frames_dir.mkdir(parents=True)
     (batch / "attach").mkdir()
     per_clip = CONFIG.get("frames_per_clip", 4)
+    spread = CONFIG.get("spread_frames_per_clip", 3)
 
     tiles, index, problems = [], [], []
     events = group_events(todo)
@@ -309,7 +322,8 @@ def new_batch():
             if not scores:
                 problems.append(f"{r}: could not decode video (corrupt or partial)")
                 continue
-            picks = pick_times(step, scores, per_clip) or [(min(2.0, (len(scores) - 1) * step), 0)]
+            picks = pick_times(step, scores, per_clip)
+            picks = sorted(picks + spread_times(step, scores, spread, picks))
             for t, sc in picks:
                 out = frames_dir / f"{len(tiles):04d}.jpg"
                 if ffmpeg_frame(p, t, out, "scale=640:-2"):

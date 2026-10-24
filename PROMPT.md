@@ -20,6 +20,13 @@ The batch to review is: `{{BATCH}}`
      of the frame, e.g. `0.5,0.4,0.3,0.4`; leave out `--t` for a photo). Then Read the
      output file it prints.
    - For close or fast passes, use `python3 trailcam.py burst FILE --start A --end B --fps 8`.
+   - **Before calling any event "nothing there", open a full-resolution `crop` of its
+     photo (no `--box`)**, or of a video frame if it has no photo, and look closely.
+     Small birds and animals far from the camera are only a few pixels in the sheets
+     and are easy to miss. The `m` number on a tile is the size of the biggest moving
+     area: `m0` doesn't mean nothing is there.
+   - Each video shows its most-active moments plus frames spread through the clip, so
+     look at all of them, not just the first.
 3. Fill in `verdicts.tsv` in the batch folder. Every event already has a row: replace
    the `?` with `keep` or `move` and write a short note (e.g. `badger, side-on`,
    `person in hi-vis`, `wind only`). Keep the tab-separated format, and don't change

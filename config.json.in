@@ -15,6 +15,7 @@
   "max_files_per_batch": 200,
   "max_batches_per_run": 2,
   "frames_per_clip": 4,
+  "spread_frames_per_clip": 3,
   "min_file_age_minutes": 10,
   "pushover": {
     "user_key_file": "~/.config/trailcam/pushover-user",
