@@ -161,7 +161,7 @@ memory. Use this instead of steps 1, 2 and 8 above; Pushover and Healthchecks.io
    ```
 6. Schedule it on the server (not inside the container) with `crontab -e`:
    ```
-   0 1,13 * * * cd $HOME/trailcam-review && mkdir -p logs && docker compose run --rm trailcam >> logs/cron.log 2>&1
+   0 1,13 * * * cd $HOME/trailcam-review && mkdir -p logs && docker compose run --rm -T trailcam >> logs/cron.log 2>&1
    ```
 
 Healthchecks.io also catches the container failing to start, because the expected
