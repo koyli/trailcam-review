@@ -2,7 +2,7 @@
 """Camera triage: turn new footage into labelled contact sheets, then file the results.
 
 Needs: python3, ffmpeg/ffprobe on PATH, Pillow (apt install python3-pil).
-All state lives next to this script; settings are in config.json.
+All state lives next to this script; settings are in config.json (copied from config.json.in).
 
   status                 unreviewed files and pending batches
   next                   print the batch to review (pending one, or a new one); empty if none
@@ -34,6 +34,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 HERE = Path(__file__).resolve().parent
+if not (HERE / "config.json").exists():
+    sys.exit(f"No config.json: copy {HERE / 'config.json.in'} to config.json and edit it.")
 CONFIG = json.loads((HERE / "config.json").read_text())
 ROOT = Path(os.path.expanduser(CONFIG["capture_root"]))
 SOURCES = [ROOT / s for s in CONFIG["sources"]]

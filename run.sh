@@ -17,6 +17,11 @@ LOG="logs/run-$(date +%F).log"
 exec >> "$LOG" 2>&1
 echo "=== $(date) ==="
 
+if [ ! -f config.json ]; then
+  echo "No config.json: copy config.json.in to config.json and edit it."
+  exit 1
+fi
+
 HC=$(python3 -c "import json; print(json.load(open('config.json')).get('healthchecks', {}).get('ping_url', ''))")
 ping_hc() {  # ping_hc [suffix] [message]
   [ -n "$HC" ] || return 0

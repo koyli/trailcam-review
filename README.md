@@ -63,7 +63,17 @@ nothing there (wind, leaves, fog, glare) or only routine visitors, which are set
    ```bash
    curl -fsSL https://claude.ai/install.sh | bash
    ```
-3. Copy this folder to the server, e.g. `~/trailcam-review`.
+3. Get the kit onto the server and create your own settings file from the template.
+   `config.json` is ignored by git, so your ping URL and tweaks never get committed:
+   ```bash
+   git clone https://github.com/koyli/trailcam-review.git ~/trailcam-review
+   ```
+   ```bash
+   cd ~/trailcam-review && cp config.json.in config.json
+   ```
+   To pick up later changes to the kit, run `git pull`. New settings in
+   `config.json.in` won't be copied into your `config.json`, so compare the two after an
+   update.
 4. **Pushover:** on pushover.net, copy your **user key** from the dashboard, then under
    *Your Applications* create one (e.g. "Trailcams") and copy its **API token**. Store
    both privately on the server (paste each when nano opens, save, exit):

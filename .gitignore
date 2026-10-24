@@ -12,3 +12,6 @@ run.lock
 # Local settings and secrets.
 .env
 *.env
+
+# Your settings: copy config.json.in to config.json and edit.
+config.json
