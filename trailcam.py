@@ -30,7 +30,7 @@ import tempfile
 import time
 import urllib.request
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -540,8 +540,45 @@ def cmd_clear_skipped(args):
     log(f"Moved {len(clips)} clips to {TO_DELETE}")
 
 
+def purge_sidecars():
+    """Delete sidecar files (e.g. Ring's .json) whose event is older than sidecar_max_age_days
+    (by the date and time in the path) and whose clip is no longer beside them. The Ring
+    downloader only looks back 7 days, so after that they're no longer needed to stop it
+    re-downloading. Sidecars next to kept clips, and anything without a dated name, stay."""
+    days = CONFIG.get("sidecar_max_age_days")
+    if not days:
+        return 0
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    deleted = 0
+    for src in SOURCES:
+        if not src.is_dir():
+            continue
+        for p in list(src.rglob("*")):
+            if (not p.is_file() or p.suffix.lower() in IMAGE_EXT | VIDEO_EXT
+                    or any(part.startswith(".") for part in p.relative_to(ROOT).parts)):
+                continue
+            if not (DATE_DIR_RE.match(p.parent.name) and TIME_PREFIX_RE.match(p.stem)):
+                continue
+            if capture_time(p) >= cutoff:
+                continue
+            if any(p.with_suffix(ext).exists() for ext in IMAGE_EXT | VIDEO_EXT | {e.upper() for e in IMAGE_EXT | VIDEO_EXT}):
+                continue
+            p.unlink()
+            deleted += 1
+        # Remove date folders left empty (never the camera folders: the downloader checks those).
+        for d in sorted((d for d in src.rglob("*") if d.is_dir() and DATE_DIR_RE.match(d.name)),
+                        key=lambda d: -len(d.parts)):
+            if not any(d.iterdir()):
+                d.rmdir()
+    return deleted
+
+
 def cmd_purge(_):
-    """Delete to-delete files moved more than delete_after_days ago (by manifest; else by file age)."""
+    """Delete to-delete files moved more than delete_after_days ago (by manifest; else by file age),
+    and old sidecar files whose clip has gone. Prints the number deleted from to-delete."""
+    n = purge_sidecars()
+    if n:
+        print(f"Deleted {n} old sidecar files", file=sys.stderr)
     if not TO_DELETE.is_dir():
         print(0)
         return
