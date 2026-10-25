@@ -14,7 +14,7 @@ All state lives next to this script; settings are in config.json (copied from co
   done BATCH [--force]   apply verdicts: keep in place, or move to to-delete
   purge                  delete to-delete files older than delete_after_days; prints the count
   clear-skipped [--dry-run]
-                         move clips of the skip_kinds types (and their sidecars) to to-delete
+                         move clips of the skip_kinds types to to-delete
   notify [--purged N]    send Pushover messages for batches not yet reported
 """
 import argparse
@@ -469,26 +469,19 @@ def cmd_burst(args):
     log(str(out))
 
 
-def sidecars(p):
-    """Non-media files that belong to a clip, e.g. Ring's <name>.json next to <name>.mp4."""
-    return [s for s in p.parent.iterdir()
-            if s != p and s.is_file() and s.name.startswith(p.stem + ".")
-            and s.suffix.lower() not in IMAGE_EXT | VIDEO_EXT]
-
-
 def move_to_delete(p):
-    """Move a clip, and any sidecar files, to the same relative place under to-delete."""
-    base = TO_DELETE / rel(p)
-    base.parent.mkdir(parents=True, exist_ok=True)
-    tag, n = "", 1
-    while (base.parent / f"{p.stem}{tag}{p.suffix}").exists():
-        tag, n = f".{n}", n + 1
-    now = datetime.now().isoformat(timespec="seconds")
+    """Move a clip to the same relative place under to-delete. Sidecar files such as Ring's
+    <name>.json stay where they are: the downloader uses them to know which events it
+    already has, and without them it downloads the clip again."""
+    dest = TO_DELETE / rel(p)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while dest.exists():
+        dest = dest.with_name(f"{p.stem}.{n}{p.suffix}")
+        n += 1
+    shutil.move(str(p), str(dest))
     with open(MANIFEST, "a") as f:
-        for src in [p] + sidecars(p):
-            dest = base.parent / f"{p.stem}{tag}{src.name[len(p.stem):]}"
-            shutil.move(str(src), str(dest))
-            f.write(f"{now}\t{dest.relative_to(TO_DELETE).as_posix()}\n")
+        f.write(f"{datetime.now().isoformat(timespec='seconds')}\t{dest.relative_to(TO_DELETE).as_posix()}\n")
 
 
 def cmd_done(args):
@@ -532,11 +525,11 @@ def cmd_done(args):
 
 def cmd_clear_skipped(args):
     """Move every finished clip of a skipped type (e.g. Ring live view) to to-delete,
-    with its sidecar files, so it's purged with everything else after delete_after_days."""
+    so it's purged with everything else after delete_after_days."""
     clips = [p for p in candidate_files(include_skipped=True) if skipped(p)]
-    size = sum(p.stat().st_size + sum(s.stat().st_size for s in sidecars(p)) for p in clips)
+    size = sum(p.stat().st_size for p in clips)
     log(f"{'Would move' if args.dry_run else 'Moving'} {len(clips)} clips "
-        f"({size / 1e9:.1f} GB with sidecars) of types: {', '.join(CONFIG.get('skip_kinds', []))}")
+        f"({size / 1e9:.1f} GB) of types: {', '.join(CONFIG.get('skip_kinds', []))}")
     if args.dry_run:
         for p in clips[:5]:
             log(f"  e.g. {rel(p)}")
