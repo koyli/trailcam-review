@@ -21,7 +21,12 @@
   "max_batches_per_run": 2,
   "frames_per_clip": 4,
   "spread_frames_per_clip": 3,
-  "min_file_age_minutes": 10,
+  "min_file_age_minutes": {
+    "default": 10,
+    "trailcam": 1,
+    "motion": 2,
+    "ring-events": 0
+  },
   "pushover": {
     "user_key_file": "~/.config/trailcam/pushover-user",
     "app_token_file": "~/.config/trailcam/pushover-token",

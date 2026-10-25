@@ -99,15 +99,24 @@ def skipped(p):
     return event_kind(p) in CONFIG.get("skip_kinds", [])
 
 
+def min_file_age(source):
+    """Minutes a file must be left alone before it's read, so half-written files are skipped.
+    min_file_age_minutes is either one number, or per source folder with a "default"."""
+    v = CONFIG.get("min_file_age_minutes", 10)
+    if isinstance(v, dict):
+        return v.get(source, v.get("default", 10))
+    return v
+
+
 def candidate_files(include_skipped=False):
     """Finished media files under the source folders (missing folders are skipped).
     Event types listed in skip_kinds (e.g. Ring live view) are left alone, unreviewed."""
-    min_age = CONFIG.get("min_file_age_minutes", 10) * 60
     now = time.time()
     out = []
     for src in SOURCES:
         if not src.is_dir():
             continue
+        min_age = min_file_age(src.name) * 60
         for p in src.rglob("*"):
             if not p.is_file() or any(part.startswith(".") for part in p.relative_to(ROOT).parts):
                 continue

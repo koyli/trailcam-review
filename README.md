@@ -163,16 +163,21 @@ memory. Use this instead of steps 1, 2 and 8 above; Pushover and Healthchecks.io
    ```
    0 1,13 * * * cd $HOME/trailcam-review && mkdir -p logs && docker compose run --rm -T trailcam >> logs/cron.log 2>&1
    ```
-   **For near-real-time alerts** (e.g. trespassers), run it every 5 minutes instead,
-   with `*/5 * * * *` in place of `0 1,13 * * *`. Then:
+   **For near-real-time alerts** (e.g. trespassers), run it every minute instead, with
+   `* * * * *` in place of `0 1,13 * * *`. Then:
    - Set `max_files_per_batch` to about 100 and `max_batches_per_run` to 1, so each run
      is short and new footage isn't stuck behind a long one.
    - A run that starts while the previous one is still going just exits. When there's
-     no new footage, Claude isn't started, so quiet runs use none of your plan.
+     no new footage, Claude isn't started, so quiet runs take a couple of seconds and
+     use none of your plan.
    - Set the Healthchecks.io check's period to 5 minutes, with about 1 hour's grace, to
      allow for the occasional long run.
-   - New files are only picked up once they're `min_file_age_minutes` old (default 10),
-     so they aren't read while still downloading. That sets the minimum delay.
+   - `min_file_age_minutes` is how long a new file is left alone before it's read, so
+     half-written files are skipped. It can be set per folder. The defaults are 0 for
+     `ring-events` (its downloader writes `.part` files and renames them when complete),
+     1 for `trailcam` (copies arrive as hidden temporary files) and 2 for `motion` (it
+     writes clips while recording). Lower is faster, but only if the folder's files
+     appear complete.
 
 Healthchecks.io also catches the container failing to start, because the expected
 ping never arrives. To update Claude Code or the tools, rebuild with
