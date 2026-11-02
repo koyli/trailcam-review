@@ -183,6 +183,40 @@ Healthchecks.io also catches the container failing to start, because the expecte
 ping never arrives. To update Claude Code or the tools, rebuild with
 `docker compose build --pull --no-cache`.
 
+## Links to the events (optional)
+
+When `web.base_url` is set (e.g. `https://example.org/cams`), each notification links to
+a page showing that alert's people, best photos, summary and kept events, with playable
+clips. `<base_url>/` is a gallery of the recent pages. The pages are written to `web/` in
+this folder and expire after `web.page_days` (default 30). Motion's `.mkv` clips are
+converted to `.mp4` for the page, since phone browsers can't play them; other clips are
+served straight from the capture folder.
+
+A web server must serve two locations, both behind a password:
+- `<base_url>/`: this kit's `web/` folder
+- `<base_url>/media/`: the capture folder, read-only
+
+For nginx, add to the HTTPS `server` block (paths as seen by nginx; in a container,
+mount `~/trailcam-review/web` and `~/capture` read-only, plus the password file):
+
+```nginx
+location /cams/ {
+    auth_basic           "Cameras";
+    auth_basic_user_file /etc/nginx/cams.htpasswd;
+    alias                /srv/cams/web/;
+    add_header           X-Robots-Tag "noindex" always;
+}
+location /cams/media/ {
+    auth_basic           "Cameras";
+    auth_basic_user_file /etc/nginx/cams.htpasswd;
+    alias                /srv/capture/;
+    location ~ /\.       { deny all; }
+}
+```
+
+Create the password file with `htpasswd -c cams.htpasswd <username>` (from the
+`apache2-utils` package).
+
 ## Tuning (`config.json`)
 
 | Setting | Default | Meaning |

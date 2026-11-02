@@ -37,5 +37,9 @@
   },
   "healthchecks": {
     "ping_url": ""
+  },
+  "web": {
+    "base_url": "",
+    "page_days": 30
   }
 }

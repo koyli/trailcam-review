@@ -5,6 +5,7 @@ highlights/
 *.jpg
 batches/
 zooms/
+web/
 logs/
 cleanup/
 run.lock

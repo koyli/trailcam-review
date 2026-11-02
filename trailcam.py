@@ -22,12 +22,14 @@ import html
 import json
 import os
 import re
+import secrets
 import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -588,6 +590,9 @@ def cmd_purge(_):
     n = purge_sidecars()
     if n:
         print(f"Deleted {n} old sidecar files", file=sys.stderr)
+    n = purge_pages()
+    if n:
+        print(f"Deleted {n} expired alert pages", file=sys.stderr)
     if not TO_DELETE.is_dir():
         print(0)
         return
@@ -621,13 +626,15 @@ def secret(path):
     return Path(os.path.expanduser(path)).read_text().strip()
 
 
-def pushover(title, message, priority=0, image=None):
+def pushover(title, message, priority=0, image=None, url=None):
     """Send one Pushover message (HTML allowed). Raises on failure so run.sh can report it."""
     p = CONFIG["pushover"]
     fields = {"token": secret(p["app_token_file"]), "user": secret(p["user_key_file"]),
               "title": title[:250], "message": message[:1024], "html": "1", "priority": str(priority)}
     if priority >= 2:
         fields.update(retry="300", expire="3600")
+    if url:
+        fields.update(url=url, url_title="Open on the web")
     boundary = uuid.uuid4().hex
     body = b""
     for k, v in fields.items():
@@ -662,6 +669,149 @@ def md_to_html(text):
     """The summary is short Markdown; Pushover understands <b> and plain line breaks."""
     text = html.escape(text, quote=False)
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+
+
+# ---------- web pages for alerts ----------
+# Each notification gets a page at <base_url>/a/<token>/ (summary, people, kept events with
+# photos and playable clips), and <base_url>/ is a gallery of the recent pages. The pages are
+# written into web/ next to this script; a web server serves web/ at <base_url>/ and the
+# capture folder, read-only, at <base_url>/media/ (both behind a password, see README).
+
+WEB = HERE / "web"
+
+PAGE_CSS = """
+body{font:16px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:12px 14px 40px;
+  background:#fafaf8;color:#1d1d1b}
+@media (prefers-color-scheme:dark){body{background:#151513;color:#e9e7e1}a{color:#8ab4f8}
+  .card{background:#20201d;border-color:#33332f}.muted{color:#a19f98}}
+h1{font-size:1.25rem;margin:.2rem 0 .8rem}h2{font-size:1.05rem;margin:1.4rem 0 .5rem}
+.card{background:#fff;border:1px solid #e3e1da;border-radius:10px;padding:10px 12px;margin:10px 0}
+.muted{color:#6b6a64;font-size:.9rem}img,video{width:100%;height:auto;border-radius:6px;margin:6px 0;
+  background:#000}.people{border-color:#d9534f;border-width:2px}ul{padding-left:1.2rem}
+.grid a{display:block;text-decoration:none;color:inherit}
+"""
+
+
+def web_base():
+    return (CONFIG.get("web") or {}).get("base_url", "").rstrip("/")
+
+
+def media_url(r):
+    return f"{web_base()}/media/" + urllib.parse.quote(r)
+
+
+def playable(src, page_dir, n):
+    """URL for a clip a phone browser can play: mp4s as they are; other containers
+    (motion's .mkv) remuxed, or if that fails re-encoded, to an mp4 beside the page."""
+    if src.suffix.lower() in (".mp4", ".m4v", ".mov"):
+        return media_url(rel(src))
+    out = page_dir / f"clip{n}.mp4"
+    for codec in (["-c", "copy"], ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-an"]):
+        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), *codec,
+                            "-movflags", "+faststart", str(out)], capture_output=True)
+        if r.returncode == 0 and out.exists() and out.stat().st_size:
+            return out.name
+    return None
+
+
+def page_html(title, body):
+    return (f"<!doctype html><html lang=en><head><meta charset=utf-8>"
+            f"<meta name=viewport content='width=device-width,initial-scale=1'>"
+            f"<meta name=robots content=noindex><title>{html.escape(title)}</title>"
+            f"<style>{PAGE_CSS}</style></head><body>{body}</body></html>")
+
+
+def build_alert_page(batches, people, when):
+    """Write the page for one notification; returns its URL, or None if pages are off."""
+    if not web_base():
+        return None
+    token = secrets.token_urlsafe(16)
+    page = WEB / "a" / token
+    page.mkdir(parents=True)
+    parts = [f"<p class=muted><a href='../../'>All recent events</a></p><h1>Cameras {html.escape(when)}</h1>"]
+    if people:
+        parts.append("<div class='card people' id=people><b>People seen</b><ul>"
+                     + "".join(f"<li>{html.escape(l)}</li>" for l in people) + "</ul></div>")
+    best = []
+    for b in batches:
+        for f in sorted((b / "attach").glob("*.jpg")):
+            shutil.copy2(f, page / f"best{len(best)}.jpg")
+            best.append((f"best{len(best)}.jpg", f.stem))
+    if best:
+        parts.append("<h2>Best moments</h2>" + "".join(
+            f"<div class=card><img src='{n}' alt='{html.escape(s)}'><div class=muted>{html.escape(s)}</div></div>"
+            for n, s in best))
+    summary = "\n\n".join((b / "summary.md").read_text().strip() for b in batches if (b / "summary.md").exists())
+    if summary:
+        parts.append("<h2>Summary</h2><div class=card>" + md_to_html(summary).replace("\n", "<br>") + "</div>")
+    kept, clip_n = [], 0
+    for b in batches:
+        for line in (b / "verdicts.tsv").read_text().splitlines()[1:]:
+            r = line.split("\t")
+            if len(r) < 4 or r[1].strip().lower() == "move":
+                continue
+            media = []
+            for f in r[3].split():
+                src = ROOT / f
+                if not src.exists():
+                    continue
+                if src.suffix.lower() in IMAGE_EXT:
+                    media.append(f"<img loading=lazy src='{media_url(f)}' alt=''>")
+                else:
+                    url = playable(src, page, clip_n)
+                    clip_n += 1
+                    if url:
+                        media.append(f"<video controls playsinline preload=metadata src='{url}'></video>")
+            first = ROOT / r[3].split()[0]
+            head = f"{camera_of(first)} · {capture_time(first):%d %b %H:%M:%S}" if first.exists() else r[0]
+            kept.append(f"<div class=card id='{b.name}-{r[0]}'><b>{html.escape(r[2].strip() or 'kept')}</b>"
+                        f"<div class=muted>{html.escape(head)}</div>{''.join(media)}</div>")
+    parts.append(f"<h2>Kept events ({len(kept)})</h2>" + ("".join(kept) or "<p class=muted>None.</p>"))
+    title = f"Cameras {when}"
+    (page / "index.html").write_text(page_html(title, "".join(parts)))
+    lead = best[0][0] if best else None
+    (page / "meta.json").write_text(json.dumps({"title": title, "when": datetime.now().isoformat(),
+                                                "people": len(people), "kept": len(kept), "lead": lead}))
+    build_gallery()
+    return f"{web_base()}/a/{token}/"
+
+
+def build_gallery():
+    """web/index.html: the recent alert pages, newest first."""
+    pages = []
+    for m in (WEB / "a").glob("*/meta.json") if (WEB / "a").exists() else []:
+        try:
+            pages.append((json.loads(m.read_text()), m.parent.name))
+        except ValueError:
+            continue
+    pages.sort(key=lambda x: x[0]["when"], reverse=True)
+    items = []
+    for meta, token in pages:
+        img = f"<img loading=lazy src='a/{token}/{meta['lead']}' alt=''>" if meta.get("lead") else ""
+        flag = " people" if meta.get("people") else ""
+        items.append(f"<a class='card{flag}' href='a/{token}/'><b>{html.escape(meta['title'])}</b>"
+                     f"<div class=muted>{meta['kept']} kept"
+                     f"{' · people seen' if meta.get('people') else ''}</div>{img}</a>")
+    WEB.mkdir(exist_ok=True)
+    (WEB / "index.html").write_text(page_html(
+        "Camera events", "<h1>Camera events</h1><div class=grid>"
+        + ("".join(items) or "<p class=muted>Nothing yet.</p>") + "</div>"))
+
+
+def purge_pages():
+    """Delete alert pages older than the web page_days (default: delete_after_days)."""
+    if not (WEB / "a").exists():
+        return 0
+    days = (CONFIG.get("web") or {}).get("page_days", CONFIG.get("delete_after_days", 30))
+    cutoff = time.time() - days * 86400
+    gone = 0
+    for d in (WEB / "a").iterdir():
+        if d.is_dir() and (d / "meta.json").exists() and (d / "meta.json").stat().st_mtime < cutoff:
+            shutil.rmtree(d)
+            gone += 1
+    if gone:
+        build_gallery()
+    return gone
 
 
 def cmd_notify(args):
@@ -700,22 +850,25 @@ def cmd_notify(args):
     people_photos = [f for f in photos if f.name.lower().startswith("people")]
     other_photos = [f for f in photos if f not in people_photos]
 
+    link = build_alert_page(done, people, when)
+
     # People first, as their own louder alert.
     if people:
         pushover(f"People seen on cameras ({when})", md_to_html("\n".join(f"• {l}" for l in people)),
-                 priority=p.get("people_priority", 1), image=people_photos[0] if people_photos else None)
+                 priority=p.get("people_priority", 1), image=people_photos[0] if people_photos else None,
+                 url=link and link + "#people")
 
     counts = (f"{totals['events']} events: {totals['kept_events']} kept, "
               f"{totals['moved_files']} files to to-delete.")
     body = md_to_html("\n\n".join(summaries) or "No summary written.") + "\n\n" + \
         html.escape(" ".join([counts] + notes))
     lead = other_photos[0] if other_photos else (people_photos[0] if people_photos and not people else None)
-    pushover(f"Cameras {when}", body, priority=p.get("summary_priority", 0), image=lead)
+    pushover(f"Cameras {when}", body, priority=p.get("summary_priority", 0), image=lead, url=link)
 
     # A few more of the best photos, quietly.
     extra = [f for f in other_photos if f != lead][:p.get("extra_photos", 3)]
     for f in extra:
-        pushover(f.stem[:250], html.escape(f.stem), priority=-1, image=f)
+        pushover(f.stem[:250], html.escape(f.stem), priority=-1, image=f, url=link)
 
     for b in done:
         (b / "NOTIFIED").write_text(datetime.now().isoformat() + "\n")
