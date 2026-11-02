@@ -680,14 +680,18 @@ def md_to_html(text):
 WEB = HERE / "web"
 
 PAGE_CSS = """
+:root{--bg:#fafaf8;--fg:#1d1d1b;--card:#fff;--line:#e3e1da;--muted:#5f5e58;--link:#1a5fb4;--alert:#c9302c}
+@media (prefers-color-scheme:dark){:root{--bg:#151513;--fg:#ecebe6;--card:#22221f;--line:#3a3a35;
+  --muted:#b3b1aa;--link:#8ab4f8;--alert:#ff6b66}}
 body{font:16px/1.45 -apple-system,system-ui,sans-serif;margin:0;padding:12px 14px 40px;
-  background:#fafaf8;color:#1d1d1b}
-@media (prefers-color-scheme:dark){body{background:#151513;color:#e9e7e1}a{color:#8ab4f8}
-  .card{background:#20201d;border-color:#33332f}.muted{color:#a19f98}}
+  background:var(--bg);color:var(--fg)}
+a{color:var(--link)}
 h1{font-size:1.25rem;margin:.2rem 0 .8rem}h2{font-size:1.05rem;margin:1.4rem 0 .5rem}
-.card{background:#fff;border:1px solid #e3e1da;border-radius:10px;padding:10px 12px;margin:10px 0}
-.muted{color:#6b6a64;font-size:.9rem}img,video{width:100%;height:auto;border-radius:6px;margin:6px 0;
-  background:#000}.people{border-color:#d9534f;border-width:2px}ul{padding-left:1.2rem}
+.card{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;margin:10px 0}
+.muted{color:var(--muted);font-size:.9rem}
+img,video{width:100%;height:auto;border-radius:6px;margin:6px 0;background:#000}
+.people{border-color:var(--alert);border-width:2px}ul{padding-left:1.2rem}
 .grid a{display:block;text-decoration:none;color:inherit}
 """
 
