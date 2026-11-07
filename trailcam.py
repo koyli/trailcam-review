@@ -988,7 +988,7 @@ def uri_of(x):
     return x["Uri"] if isinstance(x, dict) else x
 
 
-def smug_child(cred, parent, name, kind):
+def smug_child(cred, parent, name, kind, privacy):
     """The child folder or album called name under node parent, created if needed."""
     r = smug_request("GET", f"/api/v2/node/{parent}!children?count=1000", cred)
     for n in r["Response"].get("Node", []):
@@ -997,7 +997,7 @@ def smug_child(cred, parent, name, kind):
     url_name = re.sub(r"[^A-Za-z0-9]+", "-", name.title()).strip("-") or kind
     r = smug_request("POST", f"/api/v2/node/{parent}!children", cred,
                      {"Type": kind, "Name": name, "UrlName": url_name,
-                      "Privacy": smug_conf().get("privacy", "Unlisted")})
+                      "Privacy": privacy})
     return r["Response"]["Node"]
 
 
@@ -1007,8 +1007,12 @@ def smug_album(cred, state, species):
         if "folder" not in state:
             user = smug_request("GET", "/api/v2!authuser", cred)["Response"]["User"]
             root = uri_of(user["Uris"]["Node"]).rsplit("/", 1)[-1]
-            state["folder"] = smug_child(cred, root, smug_conf().get("folder", "Wildlife"), "Folder")["NodeID"]
-        node = smug_child(cred, state["folder"], species.capitalize(), "Album")
+            state["folder"] = smug_child(cred, root, smug_conf().get("folder", "Wildlife"), "Folder",
+                                         smug_conf().get("privacy", "Unlisted"))["NodeID"]
+        # Public albums show when browsing the folder, but the folder's own privacy still
+        # applies to them: inside an unlisted folder they're only found through its link.
+        node = smug_child(cred, state["folder"], species.capitalize(), "Album",
+                          smug_conf().get("album_privacy", "Public"))
         albums[species] = uri_of(node["Uris"]["Album"])
     return albums[species]
 
