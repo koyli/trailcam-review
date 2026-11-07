@@ -41,6 +41,21 @@ The batch to review is: `{{BATCH}}`
      rain, moving leaves, fog or condensation, insects, sun flare, infrared glare),
      or only routine visitors: {{ROUTINE}}.
    - When unsure, keep.
+   - Also fill the last two columns, `species` and `share`, for every event, keep or
+     move. They put the best wildlife pictures in an online gallery, one album per
+     species.
+     - `species`: the wild animals and birds in the event that you have identified
+       confidently at full resolution, as lower-case singular British common names,
+       comma-separated (e.g. `badger`, or `great tit, blue tit`). Use these names where
+       they fit, so a species keeps one album: {{SPECIES}}. Leave it empty for people,
+       pets, livestock and anything you're unsure of: a note saying "ID unsure" means an
+       empty species.
+     - `share`: what's good enough for the gallery, space-separated: `photo` (the
+       camera's photo shows the animal clearly), `frame@SECONDS` (the single best video
+       frame, e.g. `frame@4.5`, when it shows the animal better than the photo), and
+       `video` (the clip is worth watching). Be selective: the animal easy to see,
+       sharp and well framed. Leave it empty if nothing is that good, or if `species`
+       is empty.
 4. Write `summary.md` in the batch folder. It becomes a phone notification limited to
    about 900 characters, so use short bullets (`- `) under bold headings
    (`**Human activity**`), leaving out any heading that's empty:

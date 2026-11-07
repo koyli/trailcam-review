@@ -9,6 +9,8 @@ web/
 logs/
 cleanup/
 run.lock
+smugmug-state.json
+backfilled.txt
 
 # Local settings and secrets.
 .env

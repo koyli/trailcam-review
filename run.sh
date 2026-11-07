@@ -44,6 +44,7 @@ for _ in $(seq 1 "$max"); do
   python3 trailcam.py done "$batch" || { failed="review not finished: $(basename "$batch")"; break; }
 done
 
+python3 trailcam.py share || failed="${failed:+$failed; }SmugMug upload failed"
 python3 trailcam.py notify --purged "$purged" || failed="${failed:+$failed; }Pushover notification failed"
 
 if [ -n "$failed" ]; then
