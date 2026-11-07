@@ -16,7 +16,8 @@ doesn't happen. It all runs on your Claude plan, not on paid API tokens.
    each video at 2 frames a second, keeps the most-active moments, and builds contact
    sheets.
 4. **Review:** Claude Code looks at the sheets, zooms in where needed, and writes:
-   - `verdicts.tsv`: `keep` or `move` for each event, with a note
+   - `verdicts.tsv`: `keep` or `move` for each event, with a note, the species it
+     identified confidently, and which pictures are good enough to share
    - `summary.md`: the phone summary
    - `people.txt`, if anyone was seen
    - ranked crops of the best moments
@@ -25,13 +26,15 @@ doesn't happen. It all runs on your Claude plan, not on paid API tokens.
    Claude itself never moves or deletes anything.
 5. **File:** the script applies the verdicts. `keep` leaves files in place and records
    them as reviewed. `move` moves them to `~/capture/to-delete/<same path>`.
-6. **Notify:** Pushover messages are sent, but only when there's something new:
+6. **Share:** if SmugMug is set up, the pictures marked for sharing are uploaded, one
+   album per species (see below).
+7. **Notify:** Pushover messages are sent, but only when there's something new:
    - **People alert** (high priority, breaks through quiet hours) whenever people,
      vehicles or dogs are seen, with the clearest photo.
    - **Summary:** short bullets (human activity, unusual wildlife, routine wildlife in
      one line, things to check by eye), the counts, and the top photo.
    - **Up to 3 more photos** as quiet messages.
-7. **Finish:** tells Healthchecks.io the run succeeded, or that it failed (with the end
+8. **Finish:** tells Healthchecks.io the run succeeded, or that it failed (with the end
    of the log).
 
 Up to 2 batches (400 files) are handled per run. A backlog carries over to the next run.
@@ -217,6 +220,37 @@ location /cams/media/ {
 Create the password file with `htpasswd -c cams.htpasswd <username>` (from the
 `apache2-utils` package).
 
+## Wildlife gallery on SmugMug (optional)
+
+The review fills two extra columns in `verdicts.tsv`: `species` (wild animals and birds
+it identified confidently, e.g. `badger` or `great tit, blue tit`) and `share` (what's
+good enough to show: `photo`, the best video frame as `frame@SECONDS`, and `video`).
+After each review, `trailcam.py share` uploads those to SmugMug, into an album per
+species inside one folder: `Wildlife/Badger`, `Wildlife/Great tit` and so on. Folder
+and albums are created as needed, unlisted by default. Rats are left out
+(`smugmug.exclude`). Each picture is uploaded once, whichever species albums it goes
+to; `smugmug-state.json` records what's done. Files already moved to `to-delete` are
+still found.
+
+To set it up:
+
+1. Apply for a SmugMug API key at <https://api.smugmug.com/api/developer/apply>.
+2. Put the key and secret in `~/.config/trailcam/smugmug.json`:
+   `{"api_key": "...", "api_secret": "..."}`
+3. Run `python3 trailcam.py smugmug-auth` on the host (it doesn't need Pillow), open
+   the link it prints, allow access, and type in the 6-digit code. The access token is
+   added to the same file.
+
+Footage reviewed before this existed has no species. `python3 trailcam.py backfill`
+queues the events earlier reviews kept, from `smugmug.backfill_sources` (default
+`trailcam` and `motion`), as batches that are only
+reviewed for species and sharing, with no notifications. Each event is queued once. The
+batches go ahead of new footage until they're done, and use your plan like any review.
+Ring events are mostly people, so for those, queue only the ones whose notes mention an
+animal:
+
+    python3 trailcam.py backfill --sources ring-events --match '\b(fox|badger|deer|squirrel|hedgehog|rabbit|hare|bird|owl|bat|animal)'
+
 ## Tuning (`config.json`)
 
 | Setting | Default | Meaning |
@@ -228,6 +262,8 @@ Create the password file with `htpasswd -c cams.htpasswd <username>` (from the
 | `pushover.notify_when_nothing_new` | `false` | Message even when there's no new footage (Healthchecks.io already covers "is it working?") |
 | `max_files_per_batch`, `max_batches_per_run` | `200`, `2` | Lower these to use less of your plan per run |
 | `delete_after_days` | `30` | Days a file stays in `to-delete` |
+| `smugmug.folder`, `smugmug.privacy` | `Wildlife`, `Unlisted` | Where species albums go, and who can see them (`Public`, `Unlisted`, `Private`) |
+| `smugmug.exclude` | `rat` | Species never uploaded (any word of the name matches) |
 
 ## Already-reviewed footage
 
@@ -244,6 +280,8 @@ about two weeks of runs and a lot of your plan allowance.
 | `python3 trailcam.py crop FILE --t 7 --box 0,0.2,0.8,0.7` | Full-resolution zoom |
 | `python3 trailcam.py burst FILE --start 1 --end 4 --fps 8` | Frame-by-frame sheet |
 | `python3 trailcam.py purge` | Run the 30-day cleanup now |
+| `python3 trailcam.py share` | Upload anything waiting for SmugMug now |
+| `python3 trailcam.py backfill --sources trailcam` | Queue earlier kept events for species review |
 
 To rescue a file from `to-delete`, move it back. To have it reviewed again, also make
 sure its path isn't in `reviewed.txt`.

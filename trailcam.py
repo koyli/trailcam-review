@@ -16,8 +16,15 @@ All state lives next to this script; settings are in config.json (copied from co
   clear-skipped [--dry-run]
                          move clips of the skip_kinds types to to-delete
   notify [--purged N]    send Pushover messages for batches not yet reported
+  share                  upload good pictures of identified wildlife to SmugMug
+  backfill [--sources S ...] [--match REGEX]
+                         queue already-kept events for a species-only review, for SmugMug
+  smugmug-auth           one-off SmugMug login (runs without Pillow, e.g. on the host)
 """
 import argparse
+import base64
+import hashlib
+import hmac
 import html
 import json
 import os
@@ -35,7 +42,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # only smugmug-auth works without Pillow
+    Image = ImageDraw = ImageFont = None
 
 HERE = Path(__file__).resolve().parent
 if not (HERE / "config.json").exists():
@@ -346,7 +356,16 @@ def new_batch():
     todo = sorted(unreviewed(), key=capture_time)[:CONFIG.get("max_files_per_batch", 200)]
     if not todo:
         return None
-    batch = BATCHES / datetime.now().strftime("%Y%m%d-%H%M%S")
+    return build_batch(group_events(todo))
+
+
+def build_batch(events, verdicts=None):
+    """Sheets, index and verdict rows for events (as from group_events). verdicts, if
+    given, pre-fills (verdict, note) for each event."""
+    name = datetime.now().strftime("%Y%m%d-%H%M%S")
+    batch, n = BATCHES / name, 1
+    while batch.exists():  # backfill makes several a second
+        batch, n = BATCHES / f"{name}-{n}", n + 1
     frames_dir = batch / "frames"
     frames_dir.mkdir(parents=True)
     (batch / "attach").mkdir()
@@ -354,7 +373,6 @@ def new_batch():
     spread = CONFIG.get("spread_frames_per_clip", 3)
 
     tiles, index, problems = [], [], []
-    events = group_events(todo)
     for e_no, ev in enumerate(events):
         eid = f"E{e_no}"
         head = f"{eid} {ev['camera']} {ev['time']:%d/%m %H:%M}"
@@ -390,9 +408,10 @@ def new_batch():
         for row in index:
             f.write("\t".join(map(str, row)) + "\n")
     with open(batch / "verdicts.tsv", "w") as f:
-        f.write("event\tverdict\tnote\tfiles\n")
+        f.write("event\tverdict\tnote\tfiles\tspecies\tshare\n")
         for e_no, ev in enumerate(events):
-            f.write(f"E{e_no}\t?\t\t{' '.join(rel(p) for p in ev['files'])}\n")
+            verdict, note = verdicts[e_no] if verdicts else ("?", "")
+            f.write(f"E{e_no}\t{verdict}\t{note}\t{' '.join(rel(p) for p in ev['files'])}\t\t\n")
     (batch / "problems.txt").write_text("\n".join(problems) + ("\n" if problems else ""))
     return batch
 
@@ -409,7 +428,20 @@ def cmd_prompt(args):
     text = (HERE / "PROMPT.md").read_text()
     text = text.replace("{{BATCH}}", str(batch))
     text = text.replace("{{ROUTINE}}", ", ".join(CONFIG.get("routine", [])) or "(none)")
+    known = sorted(smug_state().get("albums", {}))
+    text = text.replace("{{SPECIES}}", ", ".join(known) if known else
+                        "(none yet; for example fox, badger, roe deer, grey squirrel, pheasant, robin)")
+    if (batch / "BACKFILL").exists():
+        text = BACKFILL_NOTE + text
     print(text)
+
+
+BACKFILL_NOTE = """**This batch was reviewed before.** Its verdicts and notes are already filled in:
+leave them exactly as they are. Only fill in the `species` and `share` columns (step 3)
+for every event, zooming in as usual, then write `summary.md` with the single line
+`- Backfill: species and sharing added.` Skip steps 4 to 6.
+
+"""
 
 
 def parse_box(s):
@@ -530,6 +562,8 @@ def cmd_done(args):
              "missing_files": missing, "unanswered": len(unanswered)}
     (batch / "stats.json").write_text(json.dumps(stats, indent=1))
     (batch / "DONE").write_text(datetime.now().isoformat() + "\n")
+    if (batch / "BACKFILL").exists():  # already reported when first reviewed
+        (batch / "NOTIFIED").write_text(datetime.now().isoformat() + "\n")
     log(f"{batch.name}: kept {len(kept_files)} files ({kept_events} events), "
         f"moved {len(moved_files)} files ({moved_events} events) to {TO_DELETE}")
 
@@ -885,6 +919,278 @@ def cmd_notify(args):
     log(f"Notified: {len(done)} batch(es), {len(people)} people alert line(s), {1 + len(extra)} summary message(s)")
 
 
+# ---------- SmugMug ----------
+# Good pictures of identified wildlife go to <folder>/<Species> albums: the camera photo,
+# the best video frame and the clip, as the review's `share` column says. Credentials
+# (API key and secret, then the access token from smugmug-auth) are in credentials_file.
+
+SMUG_API = "https://api.smugmug.com"
+SMUG_UPLOAD = "https://upload.smugmug.com/"
+SMUG_STATE = HERE / "smugmug-state.json"   # folder and album ids, and what's uploaded
+
+
+def smug_conf():
+    return CONFIG.get("smugmug") or {}
+
+
+def smug_cred_path():
+    return Path(os.path.expanduser(smug_conf().get("credentials_file", "~/.config/trailcam/smugmug.json")))
+
+
+def smug_state():
+    return json.loads(SMUG_STATE.read_text()) if SMUG_STATE.exists() else {}
+
+
+def oauth_q(s):
+    return urllib.parse.quote(str(s), safe="~")
+
+
+def oauth_header(method, url, cred, token=None, token_secret="", extra=None):
+    """OAuth 1.0a (HMAC-SHA1) Authorization header. A query string in url is signed too;
+    extra adds or overrides oauth_* fields."""
+    parts = urllib.parse.urlsplit(url)
+    o = {"oauth_consumer_key": cred["api_key"], "oauth_nonce": uuid.uuid4().hex,
+         "oauth_signature_method": "HMAC-SHA1", "oauth_timestamp": str(int(time.time())),
+         "oauth_version": "1.0"}
+    if token:
+        o["oauth_token"] = token
+    o.update(extra or {})
+    params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True) + list(o.items())
+    norm = "&".join(f"{k}={v}" for k, v in sorted((oauth_q(k), oauth_q(v)) for k, v in params))
+    base = "&".join([method.upper(), oauth_q(f"{parts.scheme}://{parts.netloc}{parts.path}"), oauth_q(norm)])
+    key = f"{oauth_q(cred['api_secret'])}&{oauth_q(token_secret)}"
+    o["oauth_signature"] = base64.b64encode(hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()).decode()
+    return "OAuth " + ", ".join(f'{oauth_q(k)}="{oauth_q(v)}"' for k, v in o.items())
+
+
+class SmugError(Exception):
+    def __init__(self, status, msg):
+        super().__init__(f"SmugMug HTTP {status}: {msg}")
+        self.status = status
+
+
+def smug_request(method, url, cred, body=None, headers=None):
+    url = url if url.startswith("http") else SMUG_API + url
+    h = {"Accept": "application/json", **(headers or {})}
+    if isinstance(body, dict):
+        body = json.dumps(body).encode()
+        h["Content-Type"] = "application/json"
+    h["Authorization"] = oauth_header(method, url, cred, cred["access_token"], cred["access_secret"])
+    req = urllib.request.Request(url, data=body, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raise SmugError(e.code, e.read().decode(errors="replace")[:300]) from None
+
+
+def uri_of(x):
+    return x["Uri"] if isinstance(x, dict) else x
+
+
+def smug_child(cred, parent, name, kind):
+    """The child folder or album called name under node parent, created if needed."""
+    r = smug_request("GET", f"/api/v2/node/{parent}!children?count=1000", cred)
+    for n in r["Response"].get("Node", []):
+        if n.get("Type") == kind and n.get("Name", "").lower() == name.lower():
+            return n
+    url_name = re.sub(r"[^A-Za-z0-9]+", "-", name.title()).strip("-") or kind
+    r = smug_request("POST", f"/api/v2/node/{parent}!children", cred,
+                     {"Type": kind, "Name": name, "UrlName": url_name,
+                      "Privacy": smug_conf().get("privacy", "Unlisted")})
+    return r["Response"]["Node"]
+
+
+def smug_album(cred, state, species):
+    albums = state.setdefault("albums", {})
+    if species not in albums:
+        if "folder" not in state:
+            user = smug_request("GET", "/api/v2!authuser", cred)["Response"]["User"]
+            root = uri_of(user["Uris"]["Node"]).rsplit("/", 1)[-1]
+            state["folder"] = smug_child(cred, root, smug_conf().get("folder", "Wildlife"), "Folder")["NodeID"]
+        node = smug_child(cred, state["folder"], species.capitalize(), "Album")
+        albums[species] = uri_of(node["Uris"]["Album"])
+    return albums[species]
+
+
+def header_text(s):
+    """HTTP headers are Latin-1: keep notes and names to plain ASCII."""
+    return s.replace("\u2013", "-").replace("\u2014", "-").encode("ascii", "replace").decode()
+
+
+def smug_upload(cred, album, path, title, caption, keywords):
+    data = path.read_bytes()
+    r = smug_request("POST", SMUG_UPLOAD, cred, data, {
+        "Content-MD5": hashlib.md5(data).hexdigest(), "Content-Type": "application/octet-stream",
+        "X-Smug-AlbumUri": album, "X-Smug-ResponseType": "JSON", "X-Smug-Version": "v2",
+        "X-Smug-FileName": path.name, "X-Smug-Title": header_text(title),
+        "X-Smug-Caption": header_text(caption), "X-Smug-Keywords": header_text(keywords)})
+    if r.get("stat") != "ok":
+        raise SmugError(200, r.get("message", "upload not accepted"))
+
+
+def find_media(f):
+    """A file named in verdicts.tsv, whether it stayed put or was moved to to-delete."""
+    for p in (ROOT / f, TO_DELETE / f):
+        if p.exists():
+            return p
+    return None
+
+
+def share_items(files, share, tmp):
+    """(key, path) for each item the review picked: photo, frame@SECONDS, video."""
+    photo = next((f for f in files if f.suffix.lower() in IMAGE_EXT), None)
+    video = next((f for f in files if f.suffix.lower() in VIDEO_EXT), None)
+    items = []
+    for i, word in enumerate(share):
+        if word == "photo" and photo:
+            items.append((word, photo))
+        elif word.startswith("frame@") and video:
+            try:
+                t = float(word[6:])
+            except ValueError:
+                continue
+            out = tmp / f"{video.stem}_{t:.1f}s.jpg"
+            if ffmpeg_frame(video, t, out):
+                items.append((word, out))
+        elif word == "video" and video:
+            if video.suffix.lower() in (".mp4", ".m4v", ".mov"):
+                items.append((word, video))
+            else:
+                name = playable(video, tmp, i)
+                if name:
+                    items.append((word, (tmp / name).rename(tmp / f"{video.stem}.mp4")))
+    return items
+
+
+def cmd_share(_):
+    """Upload what each finished batch marked for sharing. Batches reviewed before the
+    species column existed are just marked done; backfill covers them."""
+    path = smug_cred_path()
+    cred = json.loads(path.read_text()) if path.exists() else {}
+    if not cred.get("access_token"):
+        return  # not set up
+    exclude = {w.lower() for w in smug_conf().get("exclude", ["rat"])}
+    state = smug_state()
+    uploaded = set(state.get("uploaded", []))
+    count = 0
+
+    def save():
+        state["uploaded"] = sorted(uploaded)
+        SMUG_STATE.write_text(json.dumps(state, indent=1))
+
+    for b in sorted(BATCHES.glob("*")) if BATCHES.exists() else []:
+        if not (b / "DONE").exists() or (b / "SHARED").exists():
+            continue
+        lines = (b / "verdicts.tsv").read_text().splitlines()
+        if lines and "species" in lines[0].split("\t"):
+            for line in lines[1:]:
+                r = line.split("\t") + [""] * 6
+                species = [s.strip().lower() for s in r[4].split(",") if s.strip()]
+                species = [s for s in species if not exclude & set(re.split(r"[\s-]+", s))]
+                if not species or not r[5].split():
+                    continue
+                files = [p for p in map(find_media, r[3].split()) if p]
+                if not files:
+                    continue
+                when = f"{camera_of(ROOT / r[3].split()[0])} {capture_time(files[0]):%d %b %Y %H:%M}"
+                with tempfile.TemporaryDirectory() as td:
+                    for key, item in share_items(files, r[5].split(), Path(td)):
+                        for sp in species:
+                            k = f"{b.name}/{r[0]}/{key}/{sp}"
+                            if k in uploaded:
+                                continue
+                            try:
+                                smug_upload(cred, smug_album(cred, state, sp), item,
+                                            f"{sp.capitalize()} - {when}", r[2].strip(), sp)
+                            except SmugError as e:
+                                if not 400 <= e.status < 500 or e.status in (401, 429):
+                                    save()
+                                    raise
+                                log(f"SmugMug refused {item.name}: {e}")  # won't work next time either
+                            uploaded.add(k)
+                            count += 1
+                            save()
+        (b / "SHARED").write_text(datetime.now().isoformat() + "\n")
+    if count:
+        log(f"SmugMug: uploaded {count} item(s)")
+
+
+def cmd_backfill(args):
+    """Queue events kept by earlier reviews, from the given sources (and, with --match,
+    only those whose note matches), as batches whose review only adds species and
+    share. Each event is queued once."""
+    sources = args.sources or smug_conf().get("backfill_sources", ["trailcam", "motion"])
+    match = re.compile(args.match, re.I) if args.match else None
+    done_file = HERE / "backfilled.txt"
+    seen = set(done_file.read_text().split()) if done_file.exists() else set()
+    events = []
+    for v in sorted(BATCHES.glob("*/verdicts.tsv")) if BATCHES.exists() else []:
+        lines = v.read_text().splitlines()
+        if not lines or "species" in lines[0].split("\t"):
+            continue  # already reviewed with species
+        for line in lines[1:]:
+            r = line.split("\t") + [""] * 4
+            files = [ROOT / f for f in r[3].split()]
+            if r[1].strip().lower() != "keep" or not files or not all(p.exists() for p in files):
+                continue
+            first = rel(files[0])
+            if first in seen or not any(first.startswith(s.rstrip("/") + "/") for s in sources):
+                continue
+            if match and not match.search(r[2]):
+                continue
+            seen.add(first)
+            events.append({"camera": camera_of(files[0]), "time": capture_time(files[0]),
+                           "files": files, "note": r[2].strip()})
+    events.sort(key=lambda e: e["time"])
+    per, chunk, made = CONFIG.get("max_files_per_batch", 200), [], 0
+
+    def flush():
+        nonlocal made
+        b = build_batch(chunk, [("keep", e["note"]) for e in chunk])
+        (b / "BACKFILL").write_text("")
+        with open(done_file, "a") as f:
+            f.write("".join(rel(e["files"][0]) + "\n" for e in chunk))
+        print(b)
+        made += 1
+
+    for e in events:
+        if chunk and sum(len(c["files"]) for c in chunk) + len(e["files"]) > per:
+            flush()
+            chunk = []
+        chunk.append(e)
+    if chunk:
+        flush()
+    log(f"backfill: {len(events)} events in {made} batch(es)")
+
+
+def cmd_smugmug_auth(_):
+    """Gets an access token for the API key in the credentials file, with a PIN."""
+    path = smug_cred_path()
+    cred = json.loads(path.read_text()) if path.exists() else {}
+    if not cred.get("api_key") or not cred.get("api_secret"):
+        sys.exit(f'First put your SmugMug API key and secret in {path}:\n'
+                 '  {"api_key": "...", "api_secret": "..."}')
+    base = SMUG_API + "/services/oauth/1.0a/"
+
+    def call(endpoint, token=None, secret="", extra=None):
+        url = base + endpoint
+        req = urllib.request.Request(url, headers={"Authorization": oauth_header("GET", url, cred, token, secret, extra)})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return dict(urllib.parse.parse_qsl(r.read().decode()))
+
+    t = call("getRequestToken", extra={"oauth_callback": "oob"})
+    print("Open this link, sign in to SmugMug and allow access, then type the 6-digit code it shows:")
+    print(base + "authorize?" + urllib.parse.urlencode(
+        {"oauth_token": t["oauth_token"], "Access": "Full", "Permissions": "Modify"}))
+    code = input("Code: ").strip()
+    a = call("getAccessToken", t["oauth_token"], t["oauth_token_secret"], {"oauth_verifier": code})
+    cred.update(access_token=a["oauth_token"], access_secret=a["oauth_token_secret"])
+    path.write_text(json.dumps(cred, indent=1))
+    path.chmod(0o600)
+    print(f"Saved to {path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -910,10 +1216,16 @@ def main():
     cs.add_argument("--dry-run", action="store_true")
     n = sub.add_parser("notify")
     n.add_argument("--purged", type=int, default=0)
+    sub.add_parser("share")
+    bf = sub.add_parser("backfill")
+    bf.add_argument("--sources", nargs="+", help="capture subfolders, e.g. trailcam motion/esp32cam")
+    bf.add_argument("--match", help="only events whose note matches this regular expression")
+    sub.add_parser("smugmug-auth")
     args = ap.parse_args()
     {"status": cmd_status, "next": cmd_next, "prompt": cmd_prompt, "crop": cmd_crop,
      "burst": cmd_burst, "done": cmd_done, "purge": cmd_purge, "clear-skipped": cmd_clear_skipped,
-     "notify": cmd_notify}[args.cmd](args)
+     "notify": cmd_notify, "share": cmd_share, "backfill": cmd_backfill,
+     "smugmug-auth": cmd_smugmug_auth}[args.cmd](args)
 
 
 if __name__ == "__main__":

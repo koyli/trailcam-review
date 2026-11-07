@@ -41,5 +41,17 @@
   "web": {
     "base_url": "",
     "page_days": 30
+  },
+  "smugmug": {
+    "credentials_file": "~/.config/trailcam/smugmug.json",
+    "folder": "Wildlife",
+    "privacy": "Unlisted",
+    "exclude": [
+      "rat"
+    ],
+    "backfill_sources": [
+      "trailcam",
+      "motion"
+    ]
   }
 }
