@@ -46,6 +46,7 @@
     "credentials_file": "~/.config/trailcam/smugmug.json",
     "folder": "Wildlife",
     "privacy": "Unlisted",
+    "album_privacy": "Public",
     "exclude": [
       "rat"
     ],

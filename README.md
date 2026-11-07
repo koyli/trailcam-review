@@ -227,7 +227,9 @@ it identified confidently, e.g. `badger` or `great tit, blue tit`) and `share` (
 good enough to show: `photo`, the best video frame as `frame@SECONDS`, and `video`).
 After each review, `trailcam.py share` uploads those to SmugMug, into an album per
 species inside one folder: `Wildlife/Badger`, `Wildlife/Great tit` and so on. Folder
-and albums are created as needed, unlisted by default. Rats are left out
+and albums are created as needed. The folder is unlisted and the albums public, so
+anyone with the folder's link can browse every album in it, while none of it shows in
+search or on your SmugMug homepage (a folder's privacy also covers what's inside it). Rats are left out
 (`smugmug.exclude`). Each picture is uploaded once, whichever species albums it goes
 to; `smugmug-state.json` records what's done. Files already moved to `to-delete` are
 still found.
@@ -262,7 +264,8 @@ animal:
 | `pushover.notify_when_nothing_new` | `false` | Message even when there's no new footage (Healthchecks.io already covers "is it working?") |
 | `max_files_per_batch`, `max_batches_per_run` | `200`, `2` | Lower these to use less of your plan per run |
 | `delete_after_days` | `30` | Days a file stays in `to-delete` |
-| `smugmug.folder`, `smugmug.privacy` | `Wildlife`, `Unlisted` | Where species albums go, and who can see them (`Public`, `Unlisted`, `Private`) |
+| `smugmug.folder`, `smugmug.privacy` | `Wildlife`, `Unlisted` | The folder for species albums, and who can see it (`Public`, `Unlisted`, `Private`) |
+| `smugmug.album_privacy` | `Public` | The albums' own setting; the folder's still applies. `Unlisted` hides them when browsing the folder |
 | `smugmug.exclude` | `rat` | Species never uploaded (any word of the name matches) |
 
 ## Already-reviewed footage
