@@ -705,12 +705,18 @@ def media_url(r):
 
 
 def playable(src, page_dir, n):
-    """URL for a clip a phone browser can play: mp4s as they are; other containers
-    (motion's .mkv) remuxed, or if that fails re-encoded, to an mp4 beside the page."""
+    """URL for a clip a phone browser can play: mp4s as they are; H.264 in other
+    containers (motion's .mkv) remuxed, and anything else (the ESP32's MJPEG .avi,
+    which ffmpeg will happily put in an mp4 that no browser plays) re-encoded, to an
+    mp4 beside the page."""
     if src.suffix.lower() in (".mp4", ".m4v", ".mov"):
         return media_url(rel(src))
     out = page_dir / f"clip{n}.mp4"
-    for codec in (["-c", "copy"], ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-an"]):
+    encode = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p", "-an"]
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                            "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(src)],
+                           capture_output=True, text=True)
+    for codec in ([["-c", "copy"]] if probe.stdout.strip() == "h264" else []) + [encode]:
         r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(src), *codec,
                             "-movflags", "+faststart", str(out)], capture_output=True)
         if r.returncode == 0 and out.exists() and out.stat().st_size:
