@@ -50,12 +50,14 @@ The batch to review is: `{{BATCH}}`
        they fit, so a species keeps one album: {{SPECIES}}. Leave it empty for people,
        pets, livestock and anything you're unsure of: a note saying "ID unsure" means an
        empty species.
-     - `share`: what's good enough for the gallery, space-separated: `photo` (the
-       camera's photo shows the animal clearly), `frame@SECONDS` (the single best video
-       frame, e.g. `frame@4.5`, when it shows the animal better than the photo), and
-       `video` (the clip is worth watching). Be selective: the animal easy to see,
-       sharp and well framed. Leave it empty if nothing is that good, or if `species`
-       is empty.
+     - `share`: what goes in the gallery, space-separated: `photo` (the camera's
+       photo), `frame@SECONDS` (the single best video frame, e.g. `frame@4.5`, when it
+       shows the animal better than the photo), and `video` (the animal is in view for
+       a good part of the clip). Whenever `species` is filled in, share at least the
+       photo or the best frame if the animal is recognisable in it: it doesn't need to
+       be sharp or well framed, and routine visitors count too. Leave out only pictures
+       where the animal is a speck, mostly out of frame, or blurred beyond recognition.
+       Leave `share` empty if `species` is.
 4. Write `summary.md` in the batch folder. It becomes a phone notification limited to
    about 900 characters, so use short bullets (`- `) under bold headings
    (`**Human activity**`), leaving out any heading that's empty:

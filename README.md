@@ -254,6 +254,10 @@ animal:
 
     python3 trailcam.py backfill --sources ring-events --match '\b(fox|badger|deer|squirrel|hedgehog|rabbit|hare|bird|owl|bat|animal)'
 
+`python3 trailcam.py backfill --reshare` queues events that were given a species but
+nothing to share, for another look (useful after loosening the sharing rule in
+`PROMPT.md`). Their files are used wherever they are now, including `to-delete`.
+
 ## Tuning (`config.json`)
 
 | Setting | Default | Meaning |
