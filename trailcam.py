@@ -17,7 +17,7 @@ All state lives next to this script; settings are in config.json (copied from co
                          move clips of the skip_kinds types to to-delete
   notify [--purged N]    send Pushover messages for batches not yet reported
   share                  upload good pictures of identified wildlife to SmugMug
-  backfill [--sources S ...] [--match REGEX]
+  backfill [--sources S ...] [--match REGEX] [--reshare]
                          queue already-kept events for a species-only review, for SmugMug
   smugmug-auth           one-off SmugMug login (runs without Pillow, e.g. on the host)
 """
@@ -1145,29 +1145,38 @@ def cmd_share(_):
 def cmd_backfill(args):
     """Queue events kept by earlier reviews, from the given sources (and, with --match,
     only those whose note matches), as batches whose review only adds species and
-    share. Each event is queued once."""
-    sources = args.sources or smug_conf().get("backfill_sources", ["trailcam", "motion"])
+    share. With --reshare, instead queue events that got a species but nothing to
+    share, wherever their files are now, for another look. Each event is queued once."""
+    sources = args.sources or (CONFIG["sources"] if args.reshare else
+                               smug_conf().get("backfill_sources", ["trailcam", "motion"]))
     match = re.compile(args.match, re.I) if args.match else None
-    done_file = HERE / "backfilled.txt"
+    done_file = HERE / ("reshared.txt" if args.reshare else "backfilled.txt")
     seen = set(done_file.read_text().split()) if done_file.exists() else set()
     events = []
     for v in sorted(BATCHES.glob("*/verdicts.tsv")) if BATCHES.exists() else []:
         lines = v.read_text().splitlines()
-        if not lines or "species" in lines[0].split("\t"):
-            continue  # already reviewed with species
+        if not lines or ("species" in lines[0].split("\t")) != args.reshare:
+            continue  # backfill: batches without species; reshare: those with
         for line in lines[1:]:
-            r = line.split("\t") + [""] * 4
-            files = [ROOT / f for f in r[3].split()]
-            if r[1].strip().lower() != "keep" or not files or not all(p.exists() for p in files):
+            r = line.split("\t") + [""] * 6
+            if args.reshare:
+                if not r[4].strip() or r[5].strip():
+                    continue
+                files = [find_media(f) for f in r[3].split()]  # routine visitors are in to-delete
+            else:
+                if r[1].strip().lower() != "keep":
+                    continue
+                files = [ROOT / f for f in r[3].split()]
+            if not files or not all(p and p.exists() for p in files):
                 continue
-            first = rel(files[0])
+            first = r[3].split()[0]  # where the review saw it
             if first in seen or not any(first.startswith(s.rstrip("/") + "/") for s in sources):
                 continue
             if match and not match.search(r[2]):
                 continue
             seen.add(first)
-            events.append({"camera": camera_of(files[0]), "time": capture_time(files[0]),
-                           "files": files, "note": r[2].strip()})
+            events.append({"camera": camera_of(ROOT / first), "time": capture_time(files[0]),
+                           "files": files, "note": r[2].strip(), "key": first})
     events.sort(key=lambda e: e["time"])
     per, chunk, made = CONFIG.get("max_files_per_batch", 200), [], 0
 
@@ -1176,7 +1185,7 @@ def cmd_backfill(args):
         b = build_batch(chunk, [("keep", e["note"]) for e in chunk])
         (b / "BACKFILL").write_text("")
         with open(done_file, "a") as f:
-            f.write("".join(rel(e["files"][0]) + "\n" for e in chunk))
+            f.write("".join(e["key"] + "\n" for e in chunk))
         print(b)
         made += 1
 
@@ -1246,6 +1255,8 @@ def main():
     bf = sub.add_parser("backfill")
     bf.add_argument("--sources", nargs="+", help="capture subfolders, e.g. trailcam motion/esp32cam")
     bf.add_argument("--match", help="only events whose note matches this regular expression")
+    bf.add_argument("--reshare", action="store_true",
+                    help="events that got a species but nothing to share, for another look")
     sub.add_parser("smugmug-auth")
     args = ap.parse_args()
     {"status": cmd_status, "next": cmd_next, "prompt": cmd_prompt, "crop": cmd_crop,

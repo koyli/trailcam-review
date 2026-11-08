@@ -11,6 +11,7 @@ cleanup/
 run.lock
 smugmug-state.json
 backfilled.txt
+reshared.txt
 
 # Local settings and secrets.
 .env
