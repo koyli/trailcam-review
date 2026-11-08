@@ -1022,8 +1022,19 @@ def header_text(s):
     return s.replace("\u2013", "-").replace("\u2014", "-").encode("ascii", "replace").decode()
 
 
-def smug_upload(cred, album, path, title, caption, keywords):
-    data = path.read_bytes()
+def album_md5s(cred, album):
+    """Checksums of the pictures already in an album, however they got there."""
+    sums, start = set(), 1
+    while True:
+        r = smug_request("GET", f"{album}!images?start={start}&count=200", cred)["Response"]
+        sums |= {i["ArchivedMD5"] for i in r.get("AlbumImage", []) if i.get("ArchivedMD5")}
+        if not r.get("Pages", {}).get("NextPage"):
+            return sums
+        start += 200
+
+
+def smug_upload(cred, album, path, title, caption, keywords, data=None):
+    data = path.read_bytes() if data is None else data
     r = smug_request("POST", SMUG_UPLOAD, cred, data, {
         "Content-MD5": hashlib.md5(data).hexdigest(), "Content-Type": "application/octet-stream",
         "X-Smug-AlbumUri": album, "X-Smug-ResponseType": "JSON", "X-Smug-Version": "v2",
@@ -1077,7 +1088,8 @@ def cmd_share(_):
     exclude = {w.lower() for w in smug_conf().get("exclude", ["rat"])}
     state = smug_state()
     uploaded = set(state.get("uploaded", []))
-    count = 0
+    in_album = {}  # album -> checksums: the same picture reviewed twice (e.g. moved) goes up once
+    count = skipped = 0
 
     def save():
         state["uploaded"] = sorted(uploaded)
@@ -1104,9 +1116,19 @@ def cmd_share(_):
                             k = f"{b.name}/{r[0]}/{key}/{sp}"
                             if k in uploaded:
                                 continue
+                            album = smug_album(cred, state, sp)
+                            if album not in in_album:
+                                in_album[album] = album_md5s(cred, album)
+                            data = item.read_bytes()
+                            md5 = hashlib.md5(data).hexdigest()
+                            if md5 in in_album[album]:
+                                uploaded.add(k)
+                                skipped += 1
+                                save()
+                                continue
                             try:
-                                smug_upload(cred, smug_album(cred, state, sp), item,
-                                            f"{sp.capitalize()} - {when}", r[2].strip(), sp)
+                                smug_upload(cred, album, item, f"{sp.capitalize()} - {when}", r[2].strip(), sp, data)
+                                in_album[album].add(md5)
                             except SmugError as e:
                                 if not 400 <= e.status < 500 or e.status in (401, 429):
                                     save()
@@ -1116,8 +1138,8 @@ def cmd_share(_):
                             count += 1
                             save()
         (b / "SHARED").write_text(datetime.now().isoformat() + "\n")
-    if count:
-        log(f"SmugMug: uploaded {count} item(s)")
+    if count or skipped:
+        log(f"SmugMug: uploaded {count} item(s)" + (f", {skipped} already there" if skipped else ""))
 
 
 def cmd_backfill(args):

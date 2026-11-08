@@ -230,8 +230,9 @@ species inside one folder: `Wildlife/Badger`, `Wildlife/Great tit` and so on. Fo
 and albums are created as needed. The folder is unlisted and the albums public, so
 anyone with the folder's link can browse every album in it, while none of it shows in
 search or on your SmugMug homepage (a folder's privacy also covers what's inside it). Rats are left out
-(`smugmug.exclude`). Each picture is uploaded once, whichever species albums it goes
-to; `smugmug-state.json` records what's done. Files already moved to `to-delete` are
+(`smugmug.exclude`). Each picture is uploaded once to each species album it belongs in:
+`smugmug-state.json` records what's done, and anything whose checksum is already in the
+album is skipped, so footage that's moved and reviewed again doesn't go up twice. Files already moved to `to-delete` are
 still found.
 
 To set it up:
