@@ -1023,7 +1023,8 @@ def header_text(s):
 
 
 def album_md5s(cred, album):
-    """Checksums of the pictures already in an album, however they got there."""
+    """Checksums of the pictures already in an album, however they got there. For a
+    video, SmugMug's checksum is of a still it makes, so cmd_share also keeps its own."""
     sums, start = set(), 1
     while True:
         r = smug_request("GET", f"{album}!images?start={start}&count=200", cred)["Response"]
@@ -1089,6 +1090,7 @@ def cmd_share(_):
     state = smug_state()
     uploaded = set(state.get("uploaded", []))
     in_album = {}  # album -> checksums: the same picture reviewed twice (e.g. moved) goes up once
+    sent_md5 = state.setdefault("md5", {})  # album -> checksums of what this has uploaded
     count = skipped = 0
 
     def save():
@@ -1118,7 +1120,7 @@ def cmd_share(_):
                                 continue
                             album = smug_album(cred, state, sp)
                             if album not in in_album:
-                                in_album[album] = album_md5s(cred, album)
+                                in_album[album] = album_md5s(cred, album) | set(sent_md5.get(album, []))
                             data = item.read_bytes()
                             md5 = hashlib.md5(data).hexdigest()
                             if md5 in in_album[album]:
@@ -1129,6 +1131,7 @@ def cmd_share(_):
                             try:
                                 smug_upload(cred, album, item, f"{sp.capitalize()} - {when}", r[2].strip(), sp, data)
                                 in_album[album].add(md5)
+                                sent_md5.setdefault(album, []).append(md5)
                             except SmugError as e:
                                 if not 400 <= e.status < 500 or e.status in (401, 429):
                                     save()
