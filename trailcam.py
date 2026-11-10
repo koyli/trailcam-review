@@ -1145,8 +1145,11 @@ class CheckHandler(http.server.BaseHTTPRequestHandler):
         if not checks or key not in checks:
             return self.fail(404, "That sighting isn't on this page.")
         species = {"discard": ""}.get(action)
-        if not action and f.get("confirm") in candidates(checks[key]):
+        picks = candidates(checks[key])
+        if not action and f.get("confirm") in picks:
             action, species = "confirm", f["confirm"]
+        elif action == "confirm" and len(picks) == 1:  # pages made before candidate buttons
+            species = picks[0]
         if action == "other":
             species = clean_species(f.get("species", ""))
             if not species:
