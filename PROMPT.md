@@ -54,10 +54,11 @@ The batch to review is: `{{BATCH}}`
        photo; if the event has several, `photo@N` for each one the animal is
        recognisable in, N counting the event's photos in the files column from 1, e.g.
        `photo@2`; plain `photo` means only the first), `frame@SECONDS` (the single best video frame, e.g. `frame@4.5`, when it
-       shows the animal better than the photo), and `video` (the animal is in view for
-       a good part of the clip). Whenever `species` is filled in, share at least the
-       photo or the best frame if the animal is recognisable in it: it doesn't need to
-       be sharp or well framed, and routine visitors count too. Leave out only pictures
+       shows the animal better than the photo), and `video` (the clip, whenever the
+       animal is recognisable in two or more of its frames on the sheets; share it as
+       well as the photo or frame, not instead). Whenever `species` is filled in, share
+       at least the photo or the best frame if the animal is recognisable in it: it
+       doesn't need to be sharp or well framed, and routine visitors count too. Leave out only pictures
        where the animal is a speck, mostly out of frame, or blurred beyond recognition.
        Leave `share` empty if `species` is, unless `check` is filled in.
      - `check`: fill this in for **every** event with an animal or bird you haven't

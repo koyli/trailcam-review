@@ -305,6 +305,9 @@ animal:
 `python3 trailcam.py backfill --reshare` queues events that were given a species but
 nothing to share, for another look (useful after loosening the sharing rule in
 `PROMPT.md`). Their files are used wherever they are now, including `to-delete`.
+`python3 trailcam.py backfill --videos` does the same for events that were given a
+species and have a clip that wasn't shared: the review decides only whether to add the
+clip. Photos and frames already in an album aren't uploaded again.
 
 ## Tuning (`config.json`)
 
