@@ -27,5 +27,31 @@ services:
     cpus: 2
     pids_limit: 256
 
+  # Records answers given on the alert pages ("check by eye": yes, no, something else);
+  # the next run applies them. Sees only the kit, read-only, and writes only decisions/.
+  # Start it with `docker compose up -d web` (see README, "Confirming sightings").
+  web:
+    image: trailcam-review
+    entrypoint: ["python3", "trailcam.py", "serve"]
+    restart: unless-stopped
+    volumes:
+      - ./:/app:ro
+      - ./decisions:/app/decisions
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      cams:
+        aliases: [trailcam-web]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 32
+
 volumes:
   claude-config:
+
+networks:
+  # Shared with the web server's container, so it can reach the web service.
+  cams:
+    name: cams

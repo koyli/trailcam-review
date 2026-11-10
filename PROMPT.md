@@ -41,8 +41,8 @@ The batch to review is: `{{BATCH}}`
      rain, moving leaves, fog or condensation, insects, sun flare, infrared glare),
      or only routine visitors: {{ROUTINE}}.
    - When unsure, keep.
-   - Also fill the last two columns, `species` and `share`, for every event, keep or
-     move. They put the best wildlife pictures in an online gallery, one album per
+   - Also fill the last three columns, `species`, `share` and `check`, for every event,
+     keep or move. They put the best wildlife pictures in an online gallery, one album per
      species.
      - `species`: the wild animals and birds in the event that you have identified
        confidently at full resolution, as lower-case singular British common names,
@@ -57,7 +57,13 @@ The batch to review is: `{{BATCH}}`
        photo or the best frame if the animal is recognisable in it: it doesn't need to
        be sharp or well framed, and routine visitors count too. Leave out only pictures
        where the animal is a speck, mostly out of frame, or blurred beyond recognition.
-       Leave `share` empty if `species` is.
+       Leave `share` empty if `species` is, unless `check` is filled in.
+     - `check`: for an event you're listing under **Check by eye** because you can't be
+       sure what the animal or bird is, your best guess as a species name in the same
+       form (e.g. `pine marten`). The owner confirms or corrects it, or discards the
+       event, from the web page, and confirmed pictures then go to the gallery. Keep the
+       event, leave `species` empty, and fill `share` as if the guess were right.
+       Otherwise leave `check` empty.
 4. Write `summary.md` in the batch folder. It becomes a phone notification limited to
    about 900 characters, so use short bullets (`- `) under bold headings
    (`**Human activity**`), leaving out any heading that's empty:
@@ -67,7 +73,8 @@ The batch to review is: `{{BATCH}}`
    - **Unusual wildlife:** anything other than routine visitors, with camera and time.
    - **Also seen:** one line summarising routine wildlife, e.g.
      `foxes 3, badgers 5 (DTCH), blackbirds`.
-   - **Check by eye:** uncertain identifications, with file and time.
+   - **Check by eye:** uncertain identifications, with file and time (the events with
+     `check` filled in).
    If nothing happened, write a single bullet saying so.
    **If there was any human activity** (not camera maintenance alone), also write
    `people.txt`: one short line per event, e.g. `2 people with a dog, REAR 24 Oct 14:05`.

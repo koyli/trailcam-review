@@ -220,6 +220,54 @@ location /cams/media/ {
 Create the password file with `htpasswd -c cams.htpasswd <username>` (from the
 `apache2-utils` package).
 
+## Confirming sightings (optional)
+
+When the review isn't sure what an animal is, it lists the event under **Check by eye**
+and records its best guess in the `check` column of `verdicts.tsv`. The alert page then
+shows those events first, each with three answers:
+
+- **Yes, <guess>:** the guess becomes the event's species, and its pictures go to that
+  SmugMug album.
+- **No, discard:** the event's files are moved to `to-delete`.
+- **Something else:** type the right species (e.g. `stoat`, or `great tit, blue tit`) and
+  its pictures go to that album instead.
+
+The summary notification links straight to them. An answer is saved at once, and the
+next run (`trailcam.py checks`) applies it, so with the every-minute schedule it takes
+effect within a minute unless a review is in progress. Until then you can change your
+mind; afterwards the page shows what was done.
+
+The answers go to a small web service (`trailcam.py serve`) in its own container. It
+can read this kit but write only `decisions/`, and never touches footage or SmugMug
+itself. It accepts answers only for events shown on an alert page, and only from forms
+on your own site. To start it (it restarts with Docker after a reboot):
+
+```bash
+cd ~/trailcam-review && mkdir -p decisions && docker compose up -d web
+```
+
+It's on a Docker network called `cams`. Put the web server's container on that network
+too, and pass `<base_url>/api/` to it, behind the same password. With nginx:
+
+```nginx
+location /cams/api/ {
+    auth_basic           "Cameras";
+    auth_basic_user_file /etc/nginx/cams.htpasswd;
+    limit_except GET POST { deny all; }
+    client_max_body_size 8k;
+    # Looked up when used, so nginx still starts if the service is down.
+    resolver             127.0.0.11 valid=30s;
+    set $cams_api        trailcam-web;
+    proxy_pass           http://$cams_api:8080;
+    proxy_set_header     Host $host;
+}
+```
+
+Without a container for nginx, run `python3 trailcam.py serve --host 127.0.0.1 --port 8080`
+as a service and use `proxy_pass http://127.0.0.1:8080;` (the resolver lines aren't needed).
+
+Only pages made after this was set up have the buttons.
+
 ## Wildlife gallery on SmugMug (optional)
 
 The review fills two extra columns in `verdicts.tsv`: `species` (wild animals and birds
@@ -289,6 +337,7 @@ about two weeks of runs and a lot of your plan allowance.
 | `python3 trailcam.py burst FILE --start 1 --end 4 --fps 8` | Frame-by-frame sheet |
 | `python3 trailcam.py purge` | Run the 30-day cleanup now |
 | `python3 trailcam.py share` | Upload anything waiting for SmugMug now |
+| `python3 trailcam.py checks` | Apply answers given on the alert pages now |
 | `python3 trailcam.py backfill --sources trailcam` | Queue earlier kept events for species review |
 
 To rescue a file from `to-delete`, move it back. To have it reviewed again, also make
