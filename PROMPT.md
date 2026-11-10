@@ -58,7 +58,9 @@ The batch to review is: `{{BATCH}}`
        be sharp or well framed, and routine visitors count too. Leave out only pictures
        where the animal is a speck, mostly out of frame, or blurred beyond recognition.
        Leave `share` empty if `species` is, unless `check` is filled in.
-     - `check`: fill this in for **every** event you list under **Check by eye**: the
+     - `check`: fill this in for **every** event with an animal or bird you haven't
+       identified confidently, including any you'd call "probably", "possible" or "ID
+       unsure", and list all of those under **Check by eye**. Give the
        species it could be, most likely first, in the same form as `species` and
        separated by ` or ` (e.g. `pine marten`, or `badger or domestic cat`), or `?` if
        you can't suggest any. The owner picks one, types another or discards the event

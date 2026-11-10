@@ -797,13 +797,14 @@ def page_html(title, body):
             f"<style>{PAGE_CSS}</style></head><body>{body}</body></html>")
 
 
-def build_alert_page(batches, people, when):
-    """Write the page for one notification; returns its URL, or None if pages are off."""
+def build_alert_page(batches, people, when, token=None):
+    """Write the page for one notification; returns its URL, or None if pages are off.
+    With token, rewrites that page in place."""
     if not web_base():
         return None
-    token = secrets.token_urlsafe(16)
+    token = token or secrets.token_urlsafe(16)
     page = WEB / "a" / token
-    page.mkdir(parents=True)
+    page.mkdir(parents=True, exist_ok=True)
     parts = [f"<p class=muted><a href='../../'>All recent events</a></p><h1>Cameras {html.escape(when)}</h1>"]
     if people:
         parts.append("<div class='card people' id=people><b>People seen</b><ul>"
@@ -825,6 +826,8 @@ def build_alert_page(batches, people, when):
         for line in (b / "verdicts.tsv").read_text().splitlines()[1:]:
             r = line.split("\t") + [""] * 7
             guess = r[6].strip()
+            if not guess and r[1].strip().lower() != "move" and UNSURE_RE.search(r[2]):
+                guess = "?"  # the review was unsure but didn't offer a guess
             if not r[3].strip() or (r[1].strip().lower() == "move" and not guess):
                 continue
             media = []
@@ -863,7 +866,7 @@ def build_alert_page(batches, people, when):
     lead = best[0][0] if best else None
     (page / "meta.json").write_text(json.dumps({"title": title, "when": datetime.now().isoformat(),
                                                 "people": len(people), "kept": len(kept), "lead": lead,
-                                                "checks": len(checks)}))
+                                                "checks": len(checks), "batches": [b.name for b in batches]}))
     build_gallery()
     return f"{web_base()}/a/{token}/"
 
@@ -871,6 +874,11 @@ def build_alert_page(batches, people, when):
 def candidates(guess):
     """The species a check-by-eye guess offers: "badger or domestic cat" -> both; "?" -> none."""
     return [c for c in (clean_species(g.strip(" ?")) for g in re.split(r"\s+or\s+", guess)) if c]
+
+
+# A note that says the review wasn't sure what it saw.
+UNSURE_RE = re.compile(r"\b(unsure|uncertain|unidentified|not sure|possibl[ey]|probabl[ey]|maybe|"
+                       r"not (fully )?ruled out)\b|\?", re.I)
 
 
 def decide_forms(token, batch, event, guess):
