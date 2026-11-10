@@ -272,7 +272,7 @@ Only pages made after this was set up have the buttons.
 
 The review fills two extra columns in `verdicts.tsv`: `species` (wild animals and birds
 it identified confidently, e.g. `badger` or `great tit, blue tit`) and `share` (what's
-good enough to show: `photo`, the best video frame as `frame@SECONDS`, and `video`).
+good enough to show: `photo`, or `photo@N` for the Nth of several photos, the best video frame as `frame@SECONDS`, and `video`).
 After each review, `trailcam.py share` uploads those to SmugMug, into an album per
 species inside one folder: `Wildlife/Badger`, `Wildlife/Great tit` and so on. Folder
 and albums are created as needed. The folder is unlisted and the albums public, so
