@@ -19,7 +19,7 @@ All state lives next to this script; settings are in config.json (copied from co
   checks                 apply the answers given on the alert pages to "check by eye" events
   serve [--port N]       small web service that records those answers (behind the web server)
   share                  upload good pictures of identified wildlife to SmugMug
-  backfill [--sources S ...] [--match REGEX] [--reshare]
+  backfill [--sources S ...] [--match REGEX] [--reshare | --videos]
                          queue already-kept events for a species-only review, for SmugMug
   smugmug-auth           one-off SmugMug login (runs without Pillow, e.g. on the host)
 """
@@ -376,7 +376,7 @@ def new_batch():
 
 def build_batch(events, verdicts=None):
     """Sheets, index and verdict rows for events (as from group_events). verdicts, if
-    given, pre-fills (verdict, note) for each event."""
+    given, pre-fills (verdict, note) or (verdict, note, species, share) for each event."""
     name = datetime.now().strftime("%Y%m%d-%H%M%S")
     batch, n = BATCHES / name, 1
     while batch.exists():  # backfill makes several a second
@@ -425,8 +425,8 @@ def build_batch(events, verdicts=None):
     with open(batch / "verdicts.tsv", "w") as f:
         f.write("event\tverdict\tnote\tfiles\tspecies\tshare\tcheck\n")
         for e_no, ev in enumerate(events):
-            verdict, note = verdicts[e_no] if verdicts else ("?", "")
-            f.write(f"E{e_no}\t{verdict}\t{note}\t{files_field(ev['files'])}\t\t\t\n")
+            verdict, note, species, share = (*verdicts[e_no], "", "")[:4] if verdicts else ("?", "", "", "")
+            f.write(f"E{e_no}\t{verdict}\t{note}\t{files_field(ev['files'])}\t{species}\t{share}\t\n")
     (batch / "problems.txt").write_text("\n".join(problems) + ("\n" if problems else ""))
     return batch
 
@@ -446,7 +446,9 @@ def cmd_prompt(args):
     known = sorted(smug_state().get("albums", {}))
     text = text.replace("{{SPECIES}}", ", ".join(known) if known else
                         "(none yet; for example fox, badger, roe deer, grey squirrel, pheasant, robin)")
-    if (batch / "BACKFILL").exists():
+    if (batch / "VIDEOS").exists():
+        text = VIDEOS_NOTE + text
+    elif (batch / "BACKFILL").exists():
         text = BACKFILL_NOTE + text
     print(text)
 
@@ -455,6 +457,13 @@ BACKFILL_NOTE = """**This batch was reviewed before.** Its verdicts and notes ar
 leave them exactly as they are. Only fill in the `species` and `share` columns (step 3)
 for every event, zooming in as usual, then write `summary.md` with the single line
 `- Backfill: species and sharing added.` Skip steps 4 to 6.
+
+"""
+
+VIDEOS_NOTE = """**This batch was reviewed before, only to look at its videos.** Every column of
+`verdicts.tsv` is already filled in: leave it all exactly as it is, except add `video`
+to the end of `share` for each event whose clip should be shared (step 3's rule). Then
+write `summary.md` with the single line `- Backfill: videos added.` Skip steps 4 to 6.
 
 """
 
@@ -1056,7 +1065,8 @@ def apply_decision(d):
         else:
             sp = d["species"]
             if not r[5].strip():
-                r[5] = "photo" if any(f.lower().endswith(tuple(IMAGE_EXT)) for f in event_files(r[3])) else "video"
+                exts = {Path(f).suffix.lower() for f in event_files(r[3])}
+                r[5] = " ".join(w for w, kind in (("photo", IMAGE_EXT), ("video", VIDEO_EXT)) if exts & kind)
             # Added to any species the review was already sure of (e.g. a blackbird beside it).
             r[4] = ", ".join(dict.fromkeys(s.strip() for s in f"{r[4]},{sp}".split(",") if s.strip()))
             r[2] = f"{note} - {'confirmed' if d['action'] == 'confirm' else 'identified'} by eye: {sp}".lstrip(" -")
@@ -1412,20 +1422,30 @@ def cmd_backfill(args):
     """Queue events kept by earlier reviews, from the given sources (and, with --match,
     only those whose note matches), as batches whose review only adds species and
     share. With --reshare, instead queue events that got a species but nothing to
-    share, wherever their files are now, for another look. Each event is queued once."""
-    sources = args.sources or (CONFIG["sources"] if args.reshare else
+    share, wherever their files are now, for another look. With --videos, queue events
+    that got a species and have a clip that wasn't shared, to decide on the clip alone.
+    Each event is queued once."""
+    again = args.reshare or args.videos  # looking again at batches that have species
+    sources = args.sources or (CONFIG["sources"] if again else
                                smug_conf().get("backfill_sources", ["trailcam", "motion"]))
     match = re.compile(args.match, re.I) if args.match else None
-    done_file = HERE / ("reshared.txt" if args.reshare else "backfilled.txt")
+    done_file = HERE / ("videos-backfilled.txt" if args.videos else
+                        "reshared.txt" if args.reshare else "backfilled.txt")
     seen = set(done_file.read_text().split()) if done_file.exists() else set()
     events = []
     for v in sorted(BATCHES.glob("*/verdicts.tsv")) if BATCHES.exists() else []:
         lines = v.read_text().splitlines()
-        if not lines or ("species" in lines[0].split("\t")) != args.reshare:
-            continue  # backfill: batches without species; reshare: those with
+        if not lines or ("species" in lines[0].split("\t")) != again:
+            continue  # backfill: batches without species; reshare and videos: those with
         for line in lines[1:]:
             r = line.split("\t") + [""] * 6
-            if args.reshare:
+            if args.videos:
+                if not r[4].strip() or "video" in r[5].split():
+                    continue
+                files = [find_media(f) for f in event_files(r[3])]
+                if not any(p and p.suffix.lower() in VIDEO_EXT for p in files):
+                    continue
+            elif args.reshare:
                 if not r[4].strip() or r[5].strip():
                     continue
                 files = [find_media(f) for f in event_files(r[3])]  # routine visitors are in to-delete
@@ -1442,14 +1462,18 @@ def cmd_backfill(args):
                 continue
             seen.add(first)
             events.append({"camera": camera_of(ROOT / first), "time": capture_time(files[0]),
-                           "files": files, "note": r[2].strip(), "key": first})
+                           "files": files, "note": r[2].strip(), "key": first,
+                           "species": r[4].strip(), "share": r[5].strip()})
     events.sort(key=lambda e: e["time"])
     per, chunk, made = CONFIG.get("max_files_per_batch", 200), [], 0
 
     def flush():
         nonlocal made
-        b = build_batch(chunk, [("keep", e["note"]) for e in chunk])
+        b = build_batch(chunk, [("keep", e["note"], e["species"], e["share"]) if args.videos
+                                else ("keep", e["note"]) for e in chunk])
         (b / "BACKFILL").write_text("")
+        if args.videos:
+            (b / "VIDEOS").write_text("")
         with open(done_file, "a") as f:
             f.write("".join(e["key"] + "\n" for e in chunk))
         print(b)
@@ -1527,6 +1551,8 @@ def main():
     bf.add_argument("--match", help="only events whose note matches this regular expression")
     bf.add_argument("--reshare", action="store_true",
                     help="events that got a species but nothing to share, for another look")
+    bf.add_argument("--videos", action="store_true",
+                    help="events that got a species and have a clip that wasn't shared")
     sub.add_parser("smugmug-auth")
     args = ap.parse_args()
     {"status": cmd_status, "next": cmd_next, "prompt": cmd_prompt, "crop": cmd_crop,
