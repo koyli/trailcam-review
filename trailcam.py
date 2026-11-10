@@ -73,7 +73,7 @@ DIFF = 1.2            # per-pixel threshold, in standard deviations
 MIN_BLOB = 5          # blob size (pixels) that counts as "something moved"
 MAX_SAMPLES = 120     # long clips are sampled more sparsely than 2 fps
 EVENT_GAP = 5         # seconds; files from one camera this close together are one event
-TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)$", re.I)
+TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)(?:\D.*)?$", re.I)  # "_o (1)": a copy
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_PREFIX_RE = re.compile(r"^(\d{6})(?:\D|$)")
 DATETIME_PREFIX_RE = re.compile(r"^(\d{14})(?:\D|$)")
@@ -99,6 +99,17 @@ def reviewed_sets():
             if line:
                 (paths if "/" in line else legacy).add(line)
     return paths, legacy
+
+
+def files_field(paths):
+    """The space-separated files column of verdicts.tsv. Spaces (and %) in names are
+    %-encoded, so a name like "IMG_1 (1).JPG" stays one file."""
+    return " ".join(rel(p).replace("%", "%25").replace(" ", "%20") for p in paths)
+
+
+def event_files(field):
+    """The relative paths in a files column (see files_field)."""
+    return [urllib.parse.unquote(f) for f in field.split()]
 
 
 def is_reviewed(r, paths, legacy):
@@ -415,7 +426,7 @@ def build_batch(events, verdicts=None):
         f.write("event\tverdict\tnote\tfiles\tspecies\tshare\tcheck\n")
         for e_no, ev in enumerate(events):
             verdict, note = verdicts[e_no] if verdicts else ("?", "")
-            f.write(f"E{e_no}\t{verdict}\t{note}\t{' '.join(rel(p) for p in ev['files'])}\t\t\t\n")
+            f.write(f"E{e_no}\t{verdict}\t{note}\t{files_field(ev['files'])}\t\t\t\n")
     (batch / "problems.txt").write_text("\n".join(problems) + ("\n" if problems else ""))
     return batch
 
@@ -544,7 +555,7 @@ def cmd_done(args):
     TO_DELETE.mkdir(parents=True, exist_ok=True)
     for r in rows:
         verdict = r[1].strip().lower() if len(r) > 1 else ""
-        files = r[3].split() if len(r) > 3 else []
+        files = event_files(r[3]) if len(r) > 3 else []
         move = verdict == "move"     # anything unanswered stays where it is
         kept_events += not move
         moved_events += move
@@ -817,7 +828,7 @@ def build_alert_page(batches, people, when):
             if not r[3].strip() or (r[1].strip().lower() == "move" and not guess):
                 continue
             media = []
-            for f in r[3].split():
+            for f in event_files(r[3]):
                 src = ROOT / f
                 if not src.exists():
                     continue
@@ -828,7 +839,7 @@ def build_alert_page(batches, people, when):
                     clip_n += 1
                     if url:
                         media.append(f"<video controls playsinline preload=metadata src='{url}'></video>")
-            first = ROOT / r[3].split()[0]
+            first = ROOT / event_files(r[3])[0]
             head = f"{camera_of(first)} · {capture_time(first):%d %b %H:%M:%S}" if first.exists() else r[0]
             card = (f"<b>{html.escape(r[2].strip() or 'kept')}</b>"
                     f"<div class=muted>{html.escape(head)}</div>{''.join(media)}")
@@ -1021,7 +1032,7 @@ def apply_decision(d):
         note = r[2].strip()
         if d["action"] == "discard":
             moved = 0
-            for f in r[3].split():
+            for f in event_files(r[3]):
                 if (ROOT / f).exists():
                     move_to_delete(ROOT / f)
                     moved += 1
@@ -1030,7 +1041,7 @@ def apply_decision(d):
         else:
             sp = d["species"]
             if not r[5].strip():
-                r[5] = "photo" if any(f.lower().endswith(tuple(IMAGE_EXT)) for f in r[3].split()) else "video"
+                r[5] = "photo" if any(f.lower().endswith(tuple(IMAGE_EXT)) for f in event_files(r[3])) else "video"
             # Added to any species the review was already sure of (e.g. a blackbird beside it).
             r[4] = ", ".join(dict.fromkeys(s.strip() for s in f"{r[4]},{sp}".split(",") if s.strip()))
             r[2] = f"{note} - {'confirmed by eye' if d['action'] == 'confirm' else f'by eye: {sp}'}".lstrip(" -")
@@ -1337,10 +1348,10 @@ def cmd_share(_):
                 species = [s for s in species if not smug_excluded(s)]
                 if not species or not r[5].split():
                     continue
-                files = [p for p in map(find_media, r[3].split()) if p]
+                files = [p for p in map(find_media, event_files(r[3])) if p]
                 if not files:
                     continue
-                when = f"{camera_of(ROOT / r[3].split()[0])} {capture_time(files[0]):%d %b %Y %H:%M}"
+                when = f"{camera_of(ROOT / event_files(r[3])[0])} {capture_time(files[0]):%d %b %Y %H:%M}"
                 with tempfile.TemporaryDirectory() as td:
                     for key, item in share_items(files, r[5].split(), Path(td)):
                         for sp in species:
@@ -1394,14 +1405,14 @@ def cmd_backfill(args):
             if args.reshare:
                 if not r[4].strip() or r[5].strip():
                     continue
-                files = [find_media(f) for f in r[3].split()]  # routine visitors are in to-delete
+                files = [find_media(f) for f in event_files(r[3])]  # routine visitors are in to-delete
             else:
                 if r[1].strip().lower() != "keep":
                     continue
-                files = [ROOT / f for f in r[3].split()]
+                files = [ROOT / f for f in event_files(r[3])]
             if not files or not all(p and p.exists() for p in files):
                 continue
-            first = r[3].split()[0]  # where the review saw it
+            first = event_files(r[3])[0]  # where the review saw it
             if first in seen or not any(first.startswith(s.rstrip("/") + "/") for s in sources):
                 continue
             if match and not match.search(r[2]):
