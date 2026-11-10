@@ -1315,13 +1315,16 @@ def find_media(f):
 
 
 def share_items(files, share, tmp):
-    """(key, path) for each item the review picked: photo, frame@SECONDS, video."""
-    photo = next((f for f in files if f.suffix.lower() in IMAGE_EXT), None)
+    """(key, path) for each item the review picked: photo (the first photo), photo@N (the
+    Nth photo, for cameras that take several per trigger), frame@SECONDS, video."""
+    photos = [f for f in files if f.suffix.lower() in IMAGE_EXT]
     video = next((f for f in files if f.suffix.lower() in VIDEO_EXT), None)
     items = []
     for i, word in enumerate(share):
-        if word == "photo" and photo:
-            items.append((word, photo))
+        if word == "photo" or word.startswith("photo@"):
+            n = word[6:] if "@" in word else "1"
+            if n.isdigit() and 1 <= int(n) <= len(photos):
+                items.append((word, photos[int(n) - 1]))
         elif word.startswith("frame@") and video:
             try:
                 t = float(word[6:])

@@ -51,7 +51,9 @@ The batch to review is: `{{BATCH}}`
        pets, livestock and anything you're unsure of: a note saying "ID unsure" means an
        empty species.
      - `share`: what goes in the gallery, space-separated: `photo` (the camera's
-       photo), `frame@SECONDS` (the single best video frame, e.g. `frame@4.5`, when it
+       photo; if the event has several, `photo@N` for each one the animal is
+       recognisable in, N counting the event's photos in the files column from 1, e.g.
+       `photo@2`; plain `photo` means only the first), `frame@SECONDS` (the single best video frame, e.g. `frame@4.5`, when it
        shows the animal better than the photo), and `video` (the animal is in view for
        a good part of the clip). Whenever `species` is filled in, share at least the
        photo or the best frame if the animal is recognisable in it: it doesn't need to
