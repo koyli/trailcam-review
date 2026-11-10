@@ -16,6 +16,8 @@ All state lives next to this script; settings are in config.json (copied from co
   clear-skipped [--dry-run]
                          move clips of the skip_kinds types to to-delete
   notify [--purged N]    send Pushover messages for batches not yet reported
+  checks                 apply the answers given on the alert pages to "check by eye" events
+  serve [--port N]       small web service that records those answers (behind the web server)
   share                  upload good pictures of identified wildlife to SmugMug
   backfill [--sources S ...] [--match REGEX] [--reshare]
                          queue already-kept events for a species-only review, for SmugMug
@@ -26,6 +28,7 @@ import base64
 import hashlib
 import hmac
 import html
+import http.server
 import json
 import os
 import re
@@ -58,6 +61,7 @@ MANIFEST = TO_DELETE / ".moved.tsv"
 BATCHES = HERE / "batches"
 REVIEWED = HERE / "reviewed.txt"
 ZOOMS = HERE / "zooms"
+DECISIONS = HERE / "decisions"   # answers given on the alert pages, written by serve
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png"}
 VIDEO_EXT = {".mp4", ".mkv", ".avi", ".mov", ".m4v"}
@@ -69,7 +73,7 @@ DIFF = 1.2            # per-pixel threshold, in standard deviations
 MIN_BLOB = 5          # blob size (pixels) that counts as "something moved"
 MAX_SAMPLES = 120     # long clips are sampled more sparsely than 2 fps
 EVENT_GAP = 5         # seconds; files from one camera this close together are one event
-TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)$", re.I)
+TRAILCAM_RE = re.compile(r"^([A-Z0-9]+)_(\d{8})(\d{6})_(\d+)(?:\D.*)?$", re.I)  # "_o (1)": a copy
 DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_PREFIX_RE = re.compile(r"^(\d{6})(?:\D|$)")
 DATETIME_PREFIX_RE = re.compile(r"^(\d{14})(?:\D|$)")
@@ -95,6 +99,17 @@ def reviewed_sets():
             if line:
                 (paths if "/" in line else legacy).add(line)
     return paths, legacy
+
+
+def files_field(paths):
+    """The space-separated files column of verdicts.tsv. Spaces (and %) in names are
+    %-encoded, so a name like "IMG_1 (1).JPG" stays one file."""
+    return " ".join(rel(p).replace("%", "%25").replace(" ", "%20") for p in paths)
+
+
+def event_files(field):
+    """The relative paths in a files column (see files_field)."""
+    return [urllib.parse.unquote(f) for f in field.split()]
 
 
 def is_reviewed(r, paths, legacy):
@@ -408,10 +423,10 @@ def build_batch(events, verdicts=None):
         for row in index:
             f.write("\t".join(map(str, row)) + "\n")
     with open(batch / "verdicts.tsv", "w") as f:
-        f.write("event\tverdict\tnote\tfiles\tspecies\tshare\n")
+        f.write("event\tverdict\tnote\tfiles\tspecies\tshare\tcheck\n")
         for e_no, ev in enumerate(events):
             verdict, note = verdicts[e_no] if verdicts else ("?", "")
-            f.write(f"E{e_no}\t{verdict}\t{note}\t{' '.join(rel(p) for p in ev['files'])}\t\t\n")
+            f.write(f"E{e_no}\t{verdict}\t{note}\t{files_field(ev['files'])}\t\t\t\n")
     (batch / "problems.txt").write_text("\n".join(problems) + ("\n" if problems else ""))
     return batch
 
@@ -540,7 +555,7 @@ def cmd_done(args):
     TO_DELETE.mkdir(parents=True, exist_ok=True)
     for r in rows:
         verdict = r[1].strip().lower() if len(r) > 1 else ""
-        files = r[3].split() if len(r) > 3 else []
+        files = event_files(r[3]) if len(r) > 3 else []
         move = verdict == "move"     # anything unanswered stays where it is
         kept_events += not move
         moved_events += move
@@ -660,7 +675,7 @@ def secret(path):
     return Path(os.path.expanduser(path)).read_text().strip()
 
 
-def pushover(title, message, priority=0, image=None, url=None):
+def pushover(title, message, priority=0, image=None, url=None, url_title="Open on the web"):
     """Send one Pushover message (HTML allowed). Raises on failure so run.sh can report it."""
     p = CONFIG["pushover"]
     fields = {"token": secret(p["app_token_file"]), "user": secret(p["user_key_file"]),
@@ -668,7 +683,7 @@ def pushover(title, message, priority=0, image=None, url=None):
     if priority >= 2:
         fields.update(retry="300", expire="3600")
     if url:
-        fields.update(url=url, url_title="Open on the web")
+        fields.update(url=url, url_title=url_title)
     boundary = uuid.uuid4().hex
     body = b""
     for k, v in fields.items():
@@ -727,6 +742,23 @@ h1{font-size:1.25rem;margin:.2rem 0 .8rem}h2{font-size:1.05rem;margin:1.4rem 0 .
 img,video{width:100%;height:auto;border-radius:6px;margin:6px 0;background:#000}
 .people{border-color:var(--alert);border-width:2px}ul{padding-left:1.2rem}
 .grid a{display:block;text-decoration:none;color:inherit}
+.check{border-color:var(--link);border-width:2px}.status{font-weight:600}
+.decide{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.decide button,.decide input{font:inherit;padding:8px 12px;border:1px solid var(--line);border-radius:8px;
+  background:var(--bg);color:var(--fg)}
+.decide input{flex:1;min-width:10rem}
+"""
+
+# Shows what's been answered on a page's "check by eye" cards, from serve's /status.
+CHECK_JS = """
+fetch('../../api/status?page=' + PAGE, {cache: 'no-store'}).then(r => r.json()).then(d => {
+  for (const c of document.querySelectorAll('[data-key]')) {
+    const s = d[c.dataset.key];
+    if (!s) continue;
+    c.querySelector('.status').textContent = s.text;
+    if (s.applied) c.querySelectorAll('form').forEach(f => f.remove());
+  }
+}).catch(() => {});
 """
 
 
@@ -765,13 +797,14 @@ def page_html(title, body):
             f"<style>{PAGE_CSS}</style></head><body>{body}</body></html>")
 
 
-def build_alert_page(batches, people, when):
-    """Write the page for one notification; returns its URL, or None if pages are off."""
+def build_alert_page(batches, people, when, token=None):
+    """Write the page for one notification; returns its URL, or None if pages are off.
+    With token, rewrites that page in place."""
     if not web_base():
         return None
-    token = secrets.token_urlsafe(16)
+    token = token or secrets.token_urlsafe(16)
     page = WEB / "a" / token
-    page.mkdir(parents=True)
+    page.mkdir(parents=True, exist_ok=True)
     parts = [f"<p class=muted><a href='../../'>All recent events</a></p><h1>Cameras {html.escape(when)}</h1>"]
     if people:
         parts.append("<div class='card people' id=people><b>People seen</b><ul>"
@@ -788,14 +821,17 @@ def build_alert_page(batches, people, when):
     summary = "\n\n".join((b / "summary.md").read_text().strip() for b in batches if (b / "summary.md").exists())
     if summary:
         parts.append("<h2>Summary</h2><div class=card>" + md_to_html(summary).replace("\n", "<br>") + "</div>")
-    kept, clip_n = [], 0
+    kept, checks, check_cards, clip_n = [], {}, [], 0
     for b in batches:
         for line in (b / "verdicts.tsv").read_text().splitlines()[1:]:
-            r = line.split("\t")
-            if len(r) < 4 or r[1].strip().lower() == "move":
+            r = line.split("\t") + [""] * 7
+            guess = r[6].strip()
+            if not guess and r[1].strip().lower() != "move" and UNSURE_RE.search(r[2]):
+                guess = "?"  # the review was unsure but didn't offer a guess
+            if not r[3].strip() or (r[1].strip().lower() == "move" and not guess):
                 continue
             media = []
-            for f in r[3].split():
+            for f in event_files(r[3]):
                 src = ROOT / f
                 if not src.exists():
                     continue
@@ -806,18 +842,58 @@ def build_alert_page(batches, people, when):
                     clip_n += 1
                     if url:
                         media.append(f"<video controls playsinline preload=metadata src='{url}'></video>")
-            first = ROOT / r[3].split()[0]
+            first = ROOT / event_files(r[3])[0]
             head = f"{camera_of(first)} · {capture_time(first):%d %b %H:%M:%S}" if first.exists() else r[0]
-            kept.append(f"<div class=card id='{b.name}-{r[0]}'><b>{html.escape(r[2].strip() or 'kept')}</b>"
-                        f"<div class=muted>{html.escape(head)}</div>{''.join(media)}</div>")
+            card = (f"<b>{html.escape(r[2].strip() or 'kept')}</b>"
+                    f"<div class=muted>{html.escape(head)}</div>{''.join(media)}")
+            if guess:
+                key = f"{b.name}/{r[0]}"
+                checks[key] = guess
+                check_cards.append(f"<div class='card check' id='{html.escape(f'check-{b.name}-{r[0]}')}' "
+                                   f"data-key='{html.escape(key)}'>{card}{decide_forms(token, b.name, r[0], guess)}"
+                                   f"<div class=status></div></div>")
+            else:
+                kept.append(f"<div class=card id='{b.name}-{r[0]}'>{card}</div>")
+    if check_cards:
+        parts.insert(2 if people else 1, "<h2 id=check>Check by eye</h2><p class=muted>Is the guess right? "
+                     "Confirmed pictures go to SmugMug; discarded ones to to-delete.</p>" + "".join(check_cards))
+        (page / "checks.json").write_text(json.dumps(checks))
     parts.append(f"<h2>Kept events ({len(kept)})</h2>" + ("".join(kept) or "<p class=muted>None.</p>"))
+    if check_cards:
+        parts.append(f"<script>const PAGE = {json.dumps(token)};{CHECK_JS}</script>")
     title = f"Cameras {when}"
     (page / "index.html").write_text(page_html(title, "".join(parts)))
     lead = best[0][0] if best else None
     (page / "meta.json").write_text(json.dumps({"title": title, "when": datetime.now().isoformat(),
-                                                "people": len(people), "kept": len(kept), "lead": lead}))
+                                                "people": len(people), "kept": len(kept), "lead": lead,
+                                                "checks": len(checks), "batches": [b.name for b in batches]}))
     build_gallery()
     return f"{web_base()}/a/{token}/"
+
+
+def candidates(guess):
+    """The species a check-by-eye guess offers: "badger or domestic cat" -> both; "?" -> none."""
+    return [c for c in (clean_species(g.strip(" ?")) for g in re.split(r"\s+or\s+", guess)) if c]
+
+
+# A note that says the review wasn't sure what it saw.
+UNSURE_RE = re.compile(r"\b(unsure|uncertain|unidentified|not sure|possibl[ey]|probabl[ey]|maybe|"
+                       r"not (fully )?ruled out)\b|\?", re.I)
+
+
+def decide_forms(token, batch, event, guess):
+    """A button per candidate species, No, and something else, posted to serve. The
+    species box has its own form so that pressing Enter in it doesn't pick a candidate."""
+    hidden = "".join(f"<input type=hidden name={k} value='{html.escape(v)}'>"
+                     for k, v in (("page", token), ("batch", batch), ("event", event)))
+    picks = candidates(guess)
+    return (f"<form class=decide method=post action='../../api/decide'>{hidden}"
+            + "".join(f"<button name=confirm value='{html.escape(c)}'>"
+                      f"{'Yes, ' if len(picks) == 1 else ''}{html.escape(c)}</button>" for c in picks)
+            + f"<button name=action value=discard>No, discard</button></form>"
+            f"<form class=decide method=post action='../../api/decide'>{hidden}"
+            f"<input type=hidden name=action value=other><input name=species required maxlength=60 "
+            f"autocapitalize=none placeholder='Something else, e.g. stoat'><button>Save</button></form>")
 
 
 def build_gallery():
@@ -835,7 +911,8 @@ def build_gallery():
         flag = " people" if meta.get("people") else ""
         items.append(f"<a class='card{flag}' href='a/{token}/'><b>{html.escape(meta['title'])}</b>"
                      f"<div class=muted>{meta['kept']} kept"
-                     f"{' · people seen' if meta.get('people') else ''}</div>{img}</a>")
+                     f"{' · people seen' if meta.get('people') else ''}"
+                     f"{f' · {n} to check' if (n := meta.get('checks')) else ''}</div>{img}</a>")
     WEB.mkdir(exist_ok=True)
     (WEB / "index.html").write_text(page_html(
         "Camera events", "<h1>Camera events</h1><div class=grid>"
@@ -864,7 +941,7 @@ def cmd_notify(args):
     p = CONFIG["pushover"]
     pend = pending_batches()
     totals = {"events": 0, "kept_events": 0, "moved_files": 0, "kept_files": 0}
-    summaries, people, photos, problems = [], [], [], 0
+    summaries, people, photos, problems, checks = [], [], [], 0, 0
     for b in done:
         st = json.loads((b / "stats.json").read_text())
         for k in totals:
@@ -876,6 +953,8 @@ def cmd_notify(args):
         photos += sorted((b / "attach").glob("*.jpg"))
         if (b / "problems.txt").exists():
             problems += len([l for l in (b / "problems.txt").read_text().splitlines() if l])
+        checks += sum(1 for l in (b / "verdicts.tsv").read_text().splitlines()[1:]
+                      if (l.split("\t") + [""] * 7)[6].strip())
 
     notes = []
     if args.purged:
@@ -907,7 +986,11 @@ def cmd_notify(args):
     body = md_to_html("\n\n".join(summaries) or "No summary written.") + "\n\n" + \
         html.escape(" ".join([counts] + notes))
     lead = other_photos[0] if other_photos else (people_photos[0] if people_photos and not people else None)
-    pushover(f"Cameras {when}", body, priority=p.get("summary_priority", 0), image=lead, url=link)
+    if link and checks:
+        pushover(f"Cameras {when}", body, priority=p.get("summary_priority", 0), image=lead,
+                 url=link + "#check", url_title=f"Confirm or discard {checks} sighting{'s' * (checks > 1)}")
+    else:
+        pushover(f"Cameras {when}", body, priority=p.get("summary_priority", 0), image=lead, url=link)
 
     # A few more of the best photos, quietly.
     extra = [f for f in other_photos if f != lead][:p.get("extra_photos", 3)]
@@ -917,6 +1000,184 @@ def cmd_notify(args):
     for b in done:
         (b / "NOTIFIED").write_text(datetime.now().isoformat() + "\n")
     log(f"Notified: {len(done)} batch(es), {len(people)} people alert line(s), {1 + len(extra)} summary message(s)")
+
+
+# ---------- answers to "check by eye" ----------
+# An alert page shows each event the review was unsure of (the `check` column: its best
+# guess) with Yes / No / something-else buttons. serve, behind the web server's password,
+# only records the answer in decisions/<batch>__<event>.json; the next run's `checks`
+# applies it: a species goes into verdicts.tsv for the next SmugMug upload, and No moves
+# the event to to-delete. Once applied (<name>.done.json), an answer can't be changed.
+
+PAGE_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{8,64}")
+
+
+def decision_paths(batch, event):
+    return DECISIONS / f"{batch}__{event}.json", DECISIONS / f"{batch}__{event}.done.json"
+
+
+def write_atomic(path, text):
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def clean_species(s):
+    """Lower-case species names, comma-separated; '' if it doesn't look like one."""
+    s = ", ".join(re.sub(r"\s+", " ", p).strip() for p in s.lower().split(",") if p.strip())
+    return s if len(s) <= 60 and re.fullmatch(r"[a-z][a-z' -]*(, [a-z][a-z' -]*)*", s) else ""
+
+
+def smug_excluded(species):
+    """True if any word of the name is in smugmug.exclude (e.g. rat)."""
+    exclude = {w.lower() for w in smug_conf().get("exclude", ["rat"])}
+    return bool(exclude & set(re.split(r"[\s-]+", species)))
+
+
+def apply_decision(d):
+    """Apply one recorded answer to its event in verdicts.tsv; returns what happened."""
+    v = BATCHES / d["batch"] / "verdicts.tsv"
+    lines = v.read_text().splitlines()
+    width = len(lines[0].split("\t"))
+    for i, line in enumerate(lines[1:], 1):
+        r = line.split("\t")
+        r += [""] * (width - len(r))
+        if r[0] != d["event"]:
+            continue
+        note = r[2].strip()
+        if d["action"] == "discard":
+            moved = 0
+            for f in event_files(r[3]):
+                if (ROOT / f).exists():
+                    move_to_delete(ROOT / f)
+                    moved += 1
+            r[1], r[2], r[4] = "move", f"{note} - discarded by eye".lstrip(" -"), ""
+            result = f"Discarded: {moved} file{'s' * (moved != 1)} moved to to-delete."
+        else:
+            sp = d["species"]
+            if not r[5].strip():
+                r[5] = "photo" if any(f.lower().endswith(tuple(IMAGE_EXT)) for f in event_files(r[3])) else "video"
+            # Added to any species the review was already sure of (e.g. a blackbird beside it).
+            r[4] = ", ".join(dict.fromkeys(s.strip() for s in f"{r[4]},{sp}".split(",") if s.strip()))
+            r[2] = f"{note} - {'confirmed' if d['action'] == 'confirm' else 'identified'} by eye: {sp}".lstrip(" -")
+            (BATCHES / d["batch"] / "SHARED").unlink(missing_ok=True)  # so share looks at it again
+            names = [s.strip() for s in sp.split(",")]
+            result = f"{'Confirmed' if d['action'] == 'confirm' else 'Recorded'} as {sp}"
+            if not smug_cred_path().exists():
+                result += "."
+            elif all(smug_excluded(s) for s in names):
+                result += ": not uploaded (in smugmug.exclude)."
+            else:
+                result += ", for the SmugMug album."
+        lines[i] = "\t".join(r)
+        write_atomic(v, "\n".join(lines) + "\n")
+        return result
+    return "That event wasn't found; nothing was done."
+
+
+def cmd_checks(_):
+    for f in sorted(DECISIONS.glob("*.json")) if DECISIONS.exists() else []:
+        if f.name.endswith(".done.json"):
+            continue
+        d = json.loads(f.read_text())
+        done = decision_paths(d["batch"], d["event"])[1]
+        if done.exists():
+            continue
+        result = apply_decision(d)
+        write_atomic(done, json.dumps({**d, "applied": datetime.now().isoformat(timespec="seconds"),
+                                       "result": result}))
+        log(f"{d['batch']} {d['event']}: {result}")
+
+
+def page_checks(page):
+    """{batch/event: guess} for an alert page's check-by-eye cards, or None."""
+    f = WEB / "a" / page / "checks.json"
+    if not PAGE_TOKEN_RE.fullmatch(page) or not f.exists():
+        return None
+    return json.loads(f.read_text())
+
+
+def check_state(key):
+    pending, done = decision_paths(*key.split("/"))
+    if done.exists():
+        return {"applied": True, "text": json.loads(done.read_text())["result"]}
+    if pending.exists():
+        d = json.loads(pending.read_text())
+        what = "discard" if d["action"] == "discard" else d["species"]
+        return {"applied": False, "text": f"Saved ({what}). It's applied at the next run, usually "
+                                          f"within a minute; until then you can still change it."}
+    return None
+
+
+class CheckHandler(http.server.BaseHTTPRequestHandler):
+    """/status?page=TOKEN (GET) and /decide (POST, from the page's forms). Any path prefix
+    the web server adds (e.g. /cams/api/) is ignored."""
+
+    def reply(self, code, body, ctype="text/html; charset=utf-8", location=None):
+        data = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        if location:
+            self.send_header("Location", location)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def fail(self, code, msg):
+        self.reply(code, page_html("Not saved", f"<h1>Not saved</h1><p>{html.escape(msg)}</p>"
+                                               "<p>Go back to the page and try again.</p>"))
+
+    def do_GET(self):
+        url = urllib.parse.urlsplit(self.path)
+        checks = page_checks((urllib.parse.parse_qs(url.query).get("page") or [""])[0])
+        if not url.path.endswith("/status") or checks is None:
+            return self.fail(404, "Not found.")
+        states = {k: s for k in checks if (s := check_state(k))}
+        self.reply(200, json.dumps(states), "application/json")
+
+    def do_POST(self):
+        if not urllib.parse.urlsplit(self.path).path.endswith("/decide"):
+            return self.fail(404, "Not found.")
+        # Browsers send the saved password with forms from any site, so only accept our own.
+        origin = self.headers.get("Origin") or self.headers.get("Referer") or ""
+        if urllib.parse.urlsplit(origin).netloc != self.headers.get("Host"):
+            return self.fail(403, "That form didn't come from this site.")
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > 4096:
+            return self.fail(413, "Too much data.")
+        f = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(n).decode(errors="replace")).items()}
+        page, batch, event, action = (f.get(k, "") for k in ("page", "batch", "event", "action"))
+        checks = page_checks(page)
+        key = f"{batch}/{event}"
+        if not checks or key not in checks:
+            return self.fail(404, "That sighting isn't on this page.")
+        species = {"discard": ""}.get(action)
+        picks = candidates(checks[key])
+        if not action and f.get("confirm") in picks:
+            action, species = "confirm", f["confirm"]
+        elif action == "confirm" and len(picks) == 1:  # pages made before candidate buttons
+            species = picks[0]
+        if action == "other":
+            species = clean_species(f.get("species", ""))
+            if not species:
+                return self.fail(400, "Type a species name: letters, spaces and hyphens, "
+                                      "with commas between several (e.g. great tit, blue tit).")
+        if species is None:
+            return self.fail(400, "Unknown answer.")
+        pending, done = decision_paths(batch, event)
+        if done.exists():
+            return self.fail(409, "That sighting has already been dealt with: "
+                                  + json.loads(done.read_text())["result"])
+        write_atomic(pending, json.dumps({"page": page, "batch": batch, "event": event, "action": action,
+                                          "species": species, "at": datetime.now().isoformat(timespec="seconds")}))
+        self.reply(303, "", location=f"../a/{page}/#check-{batch}-{event}")
+
+
+def cmd_serve(args):
+    DECISIONS.mkdir(exist_ok=True)
+    log(f"Recording answers from the alert pages on port {args.port}")
+    http.server.ThreadingHTTPServer((args.host, args.port), CheckHandler).serve_forever()
 
 
 # ---------- SmugMug ----------
@@ -1086,7 +1347,6 @@ def cmd_share(_):
     cred = json.loads(path.read_text()) if path.exists() else {}
     if not cred.get("access_token"):
         return  # not set up
-    exclude = {w.lower() for w in smug_conf().get("exclude", ["rat"])}
     state = smug_state()
     uploaded = set(state.get("uploaded", []))
     in_album = {}  # album -> checksums: the same picture reviewed twice (e.g. moved) goes up once
@@ -1105,13 +1365,13 @@ def cmd_share(_):
             for line in lines[1:]:
                 r = line.split("\t") + [""] * 6
                 species = [s.strip().lower() for s in r[4].split(",") if s.strip()]
-                species = [s for s in species if not exclude & set(re.split(r"[\s-]+", s))]
+                species = [s for s in species if not smug_excluded(s)]
                 if not species or not r[5].split():
                     continue
-                files = [p for p in map(find_media, r[3].split()) if p]
+                files = [p for p in map(find_media, event_files(r[3])) if p]
                 if not files:
                     continue
-                when = f"{camera_of(ROOT / r[3].split()[0])} {capture_time(files[0]):%d %b %Y %H:%M}"
+                when = f"{camera_of(ROOT / event_files(r[3])[0])} {capture_time(files[0]):%d %b %Y %H:%M}"
                 with tempfile.TemporaryDirectory() as td:
                     for key, item in share_items(files, r[5].split(), Path(td)):
                         for sp in species:
@@ -1165,14 +1425,14 @@ def cmd_backfill(args):
             if args.reshare:
                 if not r[4].strip() or r[5].strip():
                     continue
-                files = [find_media(f) for f in r[3].split()]  # routine visitors are in to-delete
+                files = [find_media(f) for f in event_files(r[3])]  # routine visitors are in to-delete
             else:
                 if r[1].strip().lower() != "keep":
                     continue
-                files = [ROOT / f for f in r[3].split()]
+                files = [ROOT / f for f in event_files(r[3])]
             if not files or not all(p and p.exists() for p in files):
                 continue
-            first = r[3].split()[0]  # where the review saw it
+            first = event_files(r[3])[0]  # where the review saw it
             if first in seen or not any(first.startswith(s.rstrip("/") + "/") for s in sources):
                 continue
             if match and not match.search(r[2]):
@@ -1255,6 +1515,10 @@ def main():
     n = sub.add_parser("notify")
     n.add_argument("--purged", type=int, default=0)
     sub.add_parser("share")
+    sub.add_parser("checks")
+    sv = sub.add_parser("serve")
+    sv.add_argument("--host", default="0.0.0.0")
+    sv.add_argument("--port", type=int, default=8080)
     bf = sub.add_parser("backfill")
     bf.add_argument("--sources", nargs="+", help="capture subfolders, e.g. trailcam motion/esp32cam")
     bf.add_argument("--match", help="only events whose note matches this regular expression")
@@ -1264,7 +1528,8 @@ def main():
     args = ap.parse_args()
     {"status": cmd_status, "next": cmd_next, "prompt": cmd_prompt, "crop": cmd_crop,
      "burst": cmd_burst, "done": cmd_done, "purge": cmd_purge, "clear-skipped": cmd_clear_skipped,
-     "notify": cmd_notify, "share": cmd_share, "backfill": cmd_backfill,
+     "notify": cmd_notify, "share": cmd_share, "checks": cmd_checks, "serve": cmd_serve,
+     "backfill": cmd_backfill,
      "smugmug-auth": cmd_smugmug_auth}[args.cmd](args)
 
 

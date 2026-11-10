@@ -31,6 +31,8 @@ failed=""
 ping_hc /start
 
 purged=$(python3 trailcam.py purge) || { failed="purge failed"; purged=0; }
+# Answers given on the alert pages (confirm, correct or discard a sighting).
+python3 trailcam.py checks || failed="applying answers from the web pages failed"
 max=$(python3 -c "import json; print(json.load(open('config.json')).get('max_batches_per_run', 2))")
 
 for _ in $(seq 1 "$max"); do

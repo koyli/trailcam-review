@@ -12,6 +12,7 @@ run.lock
 smugmug-state.json
 backfilled.txt
 reshared.txt
+decisions/
 
 # Local settings and secrets.
 .env
@@ -19,3 +20,4 @@ reshared.txt
 
 # Your settings: copy config.json.in to config.json and edit.
 config.json
+__pycache__/
