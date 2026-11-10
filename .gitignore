@@ -20,3 +20,4 @@ decisions/
 
 # Your settings: copy config.json.in to config.json and edit.
 config.json
+__pycache__/
