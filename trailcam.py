@@ -868,14 +868,21 @@ def build_alert_page(batches, people, when):
     return f"{web_base()}/a/{token}/"
 
 
+def candidates(guess):
+    """The species a check-by-eye guess offers: "badger or domestic cat" -> both; "?" -> none."""
+    return [c for c in (clean_species(g.strip(" ?")) for g in re.split(r"\s+or\s+", guess)) if c]
+
+
 def decide_forms(token, batch, event, guess):
-    """Yes / No / something else, posted to serve. The species box has its own form so
-    that pressing Enter in it doesn't count as Yes."""
+    """A button per candidate species, No, and something else, posted to serve. The
+    species box has its own form so that pressing Enter in it doesn't pick a candidate."""
     hidden = "".join(f"<input type=hidden name={k} value='{html.escape(v)}'>"
                      for k, v in (("page", token), ("batch", batch), ("event", event)))
+    picks = candidates(guess)
     return (f"<form class=decide method=post action='../../api/decide'>{hidden}"
-            f"<button name=action value=confirm>Yes, {html.escape(guess)}</button>"
-            f"<button name=action value=discard>No, discard</button></form>"
+            + "".join(f"<button name=confirm value='{html.escape(c)}'>"
+                      f"{'Yes, ' if len(picks) == 1 else ''}{html.escape(c)}</button>" for c in picks)
+            + f"<button name=action value=discard>No, discard</button></form>"
             f"<form class=decide method=post action='../../api/decide'>{hidden}"
             f"<input type=hidden name=action value=other><input name=species required maxlength=60 "
             f"autocapitalize=none placeholder='Something else, e.g. stoat'><button>Save</button></form>")
@@ -1044,7 +1051,7 @@ def apply_decision(d):
                 r[5] = "photo" if any(f.lower().endswith(tuple(IMAGE_EXT)) for f in event_files(r[3])) else "video"
             # Added to any species the review was already sure of (e.g. a blackbird beside it).
             r[4] = ", ".join(dict.fromkeys(s.strip() for s in f"{r[4]},{sp}".split(",") if s.strip()))
-            r[2] = f"{note} - {'confirmed by eye' if d['action'] == 'confirm' else f'by eye: {sp}'}".lstrip(" -")
+            r[2] = f"{note} - {'confirmed' if d['action'] == 'confirm' else 'identified'} by eye: {sp}".lstrip(" -")
             (BATCHES / d["batch"] / "SHARED").unlink(missing_ok=True)  # so share looks at it again
             names = [s.strip() for s in sp.split(",")]
             result = f"{'Confirmed' if d['action'] == 'confirm' else 'Recorded'} as {sp}"
@@ -1137,7 +1144,9 @@ class CheckHandler(http.server.BaseHTTPRequestHandler):
         key = f"{batch}/{event}"
         if not checks or key not in checks:
             return self.fail(404, "That sighting isn't on this page.")
-        species = {"confirm": checks[key], "discard": ""}.get(action)
+        species = {"discard": ""}.get(action)
+        if not action and f.get("confirm") in candidates(checks[key]):
+            action, species = "confirm", f["confirm"]
         if action == "other":
             species = clean_species(f.get("species", ""))
             if not species:

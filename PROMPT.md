@@ -16,11 +16,11 @@ The batch to review is: `{{BATCH}}`
    to files and times. The sheets show the most-active moments of each video.
    `problems.txt` lists files that could not be read.
 2. Zoom in before naming anything:
-   - `python3 trailcam.py crop FILE --t SECONDS --box x,y,w,h` (box as fractions 0-1
+   - `python3 trailcam.py crop "FILE" --t SECONDS --box x,y,w,h` (box as fractions 0-1
      of the frame, e.g. `0.5,0.4,0.3,0.4`; leave out `--t` for a photo). Then Read the
      output file it prints. For FILE, always use the full path from `index.tsv` (e.g.
      `motion/anpr/20261024162045-52.mkv`): different cameras can have files with the
-     same name.
+     same name. Keep the quotes: some file names contain spaces.
    - For close or fast passes, use `python3 trailcam.py burst FILE --start A --end B --fps 8`.
    - **Before calling any event "nothing there", open a full-resolution `crop` of its
      photo (no `--box`)**, or of a video frame if it has no photo, and look closely.
@@ -58,12 +58,13 @@ The batch to review is: `{{BATCH}}`
        be sharp or well framed, and routine visitors count too. Leave out only pictures
        where the animal is a speck, mostly out of frame, or blurred beyond recognition.
        Leave `share` empty if `species` is, unless `check` is filled in.
-     - `check`: for an event you're listing under **Check by eye** because you can't be
-       sure what the animal or bird is, your best guess as a species name in the same
-       form (e.g. `pine marten`). The owner confirms or corrects it, or discards the
-       event, from the web page, and confirmed pictures then go to the gallery. Keep the
-       event, leave `species` empty, and fill `share` as if the guess were right.
-       Otherwise leave `check` empty.
+     - `check`: fill this in for **every** event you list under **Check by eye**: the
+       species it could be, most likely first, in the same form as `species` and
+       separated by ` or ` (e.g. `pine marten`, or `badger or domestic cat`), or `?` if
+       you can't suggest any. The owner picks one, types another or discards the event
+       on the web page, and the pictures of a picked species go to the gallery. Keep the
+       event, leave the uncertain animal out of `species`, and fill `share` as if it
+       were identified. Otherwise leave `check` empty.
 4. Write `summary.md` in the batch folder. It becomes a phone notification limited to
    about 900 characters, so use short bullets (`- `) under bold headings
    (`**Human activity**`), leaving out any heading that's empty:
@@ -74,7 +75,7 @@ The batch to review is: `{{BATCH}}`
    - **Also seen:** one line summarising routine wildlife, e.g.
      `foxes 3, badgers 5 (DTCH), blackbirds`.
    - **Check by eye:** uncertain identifications, with file and time (the events with
-     `check` filled in).
+     `check` filled in, and no others).
    If nothing happened, write a single bullet saying so.
    **If there was any human activity** (not camera maintenance alone), also write
    `people.txt`: one short line per event, e.g. `2 people with a dog, REAR 24 Oct 14:05`.
