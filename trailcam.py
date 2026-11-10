@@ -1031,7 +1031,8 @@ def apply_decision(d):
             sp = d["species"]
             if not r[5].strip():
                 r[5] = "photo" if any(f.lower().endswith(tuple(IMAGE_EXT)) for f in r[3].split()) else "video"
-            r[4] = sp
+            # Added to any species the review was already sure of (e.g. a blackbird beside it).
+            r[4] = ", ".join(dict.fromkeys(s.strip() for s in f"{r[4]},{sp}".split(",") if s.strip()))
             r[2] = f"{note} - {'confirmed by eye' if d['action'] == 'confirm' else f'by eye: {sp}'}".lstrip(" -")
             (BATCHES / d["batch"] / "SHARED").unlink(missing_ok=True)  # so share looks at it again
             names = [s.strip() for s in sp.split(",")]
